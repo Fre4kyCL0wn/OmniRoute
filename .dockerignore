@@ -150,3 +150,6 @@ app.__qa_backup/
 .next-playwright/
 cloud/
 electron/dist-electron
+docs/architecture/worktree-isolation.md
+docs/architecture/modification-scenarios.md
+docs/architecture/HISTORICAL_NOTES.md
