@@ -8,8 +8,8 @@
 
 import { getCombos } from "@/lib/db/combos";
 import type { ComboRecord } from "@/domain/persistence/comboRepositories";
-import { getModelCatalog, getComboRegistry, refreshComboRegistry, refreshModelCatalog, getCombo, findModelRef } from "./registry";
-import type { O9F1DynamicCombo, O9F1ModelRef, CostClass } from "./types";
+import { getModelCatalog, refreshComboRegistry, refreshModelCatalog, getComboRegistry } from "./registry";
+import type { O9F1DynamicCombo } from "./types";
 
 export interface CatalogAdapterStatus {
   source: "simulated" | "db" | "mixed";
@@ -58,7 +58,7 @@ export async function readDbComboCatalog(): Promise<Record<string, Partial<O9F1D
  * Keeps the simulated system combos (`open-free-models`, `cohere-free`, `unrestricted`)
  * as a base layer, then overlays any DB-discovered definitions.
  */
-export async function refreshRealCatalog(options: CatalogRefreshOptions = {}): Promise<CatalogAdapterStatus> {
+export async function refreshRealCatalog(_options: CatalogRefreshOptions = {}): Promise<CatalogAdapterStatus> {
   refreshModelCatalog();
   refreshComboRegistry();
 

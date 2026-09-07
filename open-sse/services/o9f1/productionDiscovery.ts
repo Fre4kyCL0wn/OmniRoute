@@ -13,7 +13,7 @@
  * Production is read-only: this module performs no PUT/POST/DELETE.
  */
 
-import type { O9F1DynamicCombo, O9F1ModelRef, CostClass, RoutingPolicy } from "./types";
+import type { O9F1ModelRef, CostClass, RoutingPolicy } from "./types";
 
 export type Executability =
   | "discovered"      // pulled from remote
