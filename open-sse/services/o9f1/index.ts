@@ -71,6 +71,43 @@ export { resolve } from "./resolve";
 import { resolve } from "./resolve";
 import { transitionExpiredCooldowns } from "./health";
 
+// O9-F2: real catalog adapter (read-only, layered on F1 registry).
+export {
+  buildRealComboRegistry,
+  readDbComboCatalog,
+  refreshRealCatalog,
+} from "./realCatalogAdapter";
+export type { CatalogAdapterStatus, CatalogRefreshOptions } from "./realCatalogAdapter";
+
+// O9-F2: production read-only combo discovery.
+export {
+  discoverProductionCombos,
+} from "./productionDiscovery";
+export type {
+  DiscoveredCombo,
+  Executability,
+  ProductionDiscoveryResult,
+} from "./productionDiscovery";
+
+// O9-F2: controlled definition import.
+export {
+  planImport,
+  applyImport,
+} from "./importSync";
+export type { ImportPlan, ImportResult } from "./importSync";
+
+// O9-F2: shared pipeline routing decision + failure feedback.
+export {
+  sharedRouteDecision,
+  classifyUpstreamFailure,
+  reportUpstreamSuccess,
+} from "./pipelineWire";
+export type {
+  SharedRouteDecisionInput,
+  SharedRouteDecisionResult,
+  FailureFeedback,
+} from "./pipelineWire";
+
 /**
  * Top-level entry point used by the request pipeline.
  *
