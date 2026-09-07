@@ -23,6 +23,20 @@ export type Executability =
   | "degraded"        // partial provider set
   | "unsupported";    // strategy/format not supported by O9-F2
 
+export interface DependencyClassification {
+  category:
+    | "already_available"
+    | "no_auth_safe_to_enable"
+    | "fresh_auth_required"
+    | "unsupported_on_shadow"
+    | "client_restricted"
+    | "intentionally_not_migrated"
+    | "unknown";
+  reason: string;
+  auth_required: boolean;
+  executable_leaf: boolean;
+}
+
 export interface DiscoveredCombo {
   remoteId: string;
   remoteName: string;
@@ -37,6 +51,21 @@ export interface DiscoveredCombo {
   localModelIds: string[];
   /** O9-F1 model ref ids referenced by the combo but absent locally. */
   missingModelIds: string[];
+  /** F2.2: dependency classification per target (separate from cost/health). */
+  dependencyStatus: DependencyClassification[];
+  /** F2.2: executable leaf count (actual Shadow-runnable targets). */
+  executableLeafCount: number;
+  /** F2.2: missing dependency reason (not a cost inference). */
+  missingDependencyReason:
+    | "missing_provider"
+    | "missing_account"
+    | "auth_required"
+    | "model_unavailable"
+    | "client_restricted"
+    | "quota_limited"
+    | "cooldown"
+    | "no_executable_leaf"
+    | "none";
 }
 
 export interface ProductionDiscoveryResult {

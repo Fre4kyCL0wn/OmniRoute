@@ -15,7 +15,7 @@ import type { Executability, ProductionDiscoveryResult } from "./productionDisco
 
 export interface ImportPlan {
   dryRun: boolean;
-  toImport: Array<{ sourceComboName: string; targetName: string; executability: Executability; action: "create" | "update" | "skip"; reason: string }>;
+  toImport: Array<{ sourceComboName: string; targetName: string; executability: Executability; action: "create" | "update" | "skip"; reason: string; missingDependencyReason: string; executableLeafCount: number; costClass: CostClass; healthState: string }>;
   toDeleteLocally?: string[];
   secretsCopied: boolean;
 }
