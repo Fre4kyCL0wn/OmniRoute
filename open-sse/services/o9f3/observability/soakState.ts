@@ -8,7 +8,19 @@
  *   - A request is "meaningful real" only when it reached a real upstream and is
  *     fully durable (id + window + session + timestamps). Synthetic and local
  *     pre-upstream failures never touch cumulative counters.
+ *
+ * Privileged state persistence hardening:
+ *   - IntegrityHash provides tamper-evident checksumming of state snapshots.
+ *   - validateSchemaVersion / validateBaselineImmutability / validateMonotonicTimestamps
+ *     catch corruption at load time before any state is trusted.
+ *   - assertStateInvariant bundles all validation into a single guard.
  */
+
+import { createHash } from "node:crypto";
+
+export const F3_2_SCHEMA_VERSION = "o9-f3.2-v2";
+export const F3_2_MAX_REQUEST_ENTRIES = 5000;
+export const F3_2_MAX_WINDOWS = 100;
 
 export type CostClass = "verified_free" | "subscription_included" | "paid" | "mixed" | "unknown";
 
@@ -316,4 +328,116 @@ export function completeWindow(
   if (!summary) return state;
 
   return recomputeDerived({ ...state, windows: [...state.windows, summary] });
+}
+
+/* ------------------------------------------------------------------ */
+/* Privileged state persistence hardening — integrity hash            */
+/* ------------------------------------------------------------------ */
+
+export interface IntegrityHash {
+  schemaVersion: string;
+  baselineMeaningfulRequests: number;
+  baselineSuccesses: number;
+  baselineFailures: number;
+  entryCount: number;
+  hash: string;
+}
+
+export function computeIntegrityHash(state: SoakState): IntegrityHash {
+  const entriesSorted = [...state.request_entries].sort((a, b) =>
+    a.requestId.localeCompare(b.requestId)
+  );
+  const payload = JSON.stringify({
+    schema_version: state.schema_version,
+    baseline_meaningful_requests: state.baseline_meaningful_requests,
+    baseline_successes: state.baseline_successes,
+    baseline_failures: state.baseline_failures,
+    request_entries: entriesSorted,
+  });
+  const hash = createHash("sha256").update(payload).digest("hex");
+  return {
+    schemaVersion: state.schema_version,
+    baselineMeaningfulRequests: state.baseline_meaningful_requests,
+    baselineSuccesses: state.baseline_successes,
+    baselineFailures: state.baseline_failures,
+    entryCount: state.request_entries.length,
+    hash,
+  };
+}
+
+export function validateIntegrityHash(state: SoakState, expected: IntegrityHash): void {
+  const actual = computeIntegrityHash(state);
+  if (actual.hash !== expected.hash) {
+    throw new Error(
+      `F3_2_INTEGRITY_HASH_MISMATCH: expected ${expected.hash.slice(0, 8)}… got ${actual.hash.slice(0, 8)}…`
+    );
+  }
+  if (actual.entryCount !== expected.entryCount) {
+    throw new Error(
+      `F3_2_ENTRY_COUNT_MISMATCH: expected ${expected.entryCount} got ${actual.entryCount}`
+    );
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Privileged state persistence hardening — schema / baseline guards  */
+/* ------------------------------------------------------------------ */
+
+export function validateSchemaVersion(state: SoakState): void {
+  if (state.schema_version !== F3_2_SCHEMA_VERSION) {
+    throw new Error(
+      `F3_2_SCHEMA_VERSION_MISMATCH: expected ${F3_2_SCHEMA_VERSION} got ${state.schema_version}`
+    );
+  }
+}
+
+export function validateBaselineImmutability(state: SoakState): void {
+  if (state.baseline_meaningful_requests !== F3_2_BASELINE_MEANINGFUL) {
+    throw new Error(
+      `F3_2_BASELINE_CORRUPTED: baseline_meaningful_requests expected ${F3_2_BASELINE_MEANINGFUL} got ${state.baseline_meaningful_requests}`
+    );
+  }
+  if (state.baseline_successes !== F3_2_BASELINE_SUCCESSES) {
+    throw new Error(
+      `F3_2_BASELINE_CORRUPTED: baseline_successes expected ${F3_2_BASELINE_SUCCESSES} got ${state.baseline_successes}`
+    );
+  }
+  if (state.baseline_failures !== F3_2_BASELINE_FAILURES) {
+    throw new Error(
+      `F3_2_BASELINE_CORRUPTED: baseline_failures expected ${F3_2_BASELINE_FAILURES} got ${state.baseline_failures}`
+    );
+  }
+}
+
+export function validateMonotonicTimestamps(state: SoakState): void {
+  const created = new Date(state.created_at).getTime();
+  const updated = new Date(state.updated_at).getTime();
+  if (Number.isNaN(created) || Number.isNaN(updated)) {
+    throw new Error("F3_2_INVALID_TIMESTAMPS: created_at or updated_at is not valid ISO 8601");
+  }
+  if (updated < created) {
+    throw new Error(
+      `F3_2_NON_MONOTONIC_TIMESTAMPS: updated_at (${state.updated_at}) < created_at (${state.created_at})`
+    );
+  }
+}
+
+export function validateEntryBounds(state: SoakState): void {
+  if (state.request_entries.length > F3_2_MAX_REQUEST_ENTRIES) {
+    throw new Error(
+      `F3_2_ENTRY_BOUNDS_EXCEEDED: request_entries ${state.request_entries.length} > ${F3_2_MAX_REQUEST_ENTRIES}`
+    );
+  }
+  if (state.windows.length > F3_2_MAX_WINDOWS) {
+    throw new Error(
+      `F3_2_WINDOW_BOUNDS_EXCEEDED: windows ${state.windows.length} > ${F3_2_MAX_WINDOWS}`
+    );
+  }
+}
+
+export function assertStateInvariant(state: SoakState): void {
+  validateSchemaVersion(state);
+  validateBaselineImmutability(state);
+  validateMonotonicTimestamps(state);
+  validateEntryBounds(state);
 }
