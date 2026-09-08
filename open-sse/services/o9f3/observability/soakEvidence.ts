@@ -3,6 +3,42 @@
  */
 import { isMeaningfulRealRequest, SoakState } from "./soakState";
 
+export interface NonSoakProbeIncident {
+  route: string;
+  status: number;
+  shadowOnly: true;
+  countedInSoak: false;
+  promptsIncluded: false;
+  responseContentIncluded: false;
+  credentialsIncluded: false;
+}
+
+export function buildPreWindowShadowProbeIncident(): {
+  title: string;
+  classification: string;
+  probes: NonSoakProbeIncident[];
+  countersModified: false;
+  productionModified: false;
+  ut99Modified: false;
+} {
+  return {
+    title: "O9-F3.2 pre-window Shadow inference probes",
+    classification: "non-soak-non-evidence",
+    probes: ["auto/best-fast", "coding", "codex/gpt-5.5-low"].map((route) => ({
+      route,
+      status: 200,
+      shadowOnly: true,
+      countedInSoak: false,
+      promptsIncluded: false,
+      responseContentIncluded: false,
+      credentialsIncluded: false,
+    })),
+    countersModified: false,
+    productionModified: false,
+    ut99Modified: false,
+  };
+}
+
 export interface SoakEvidence {
   phase: string;
   branch: string;

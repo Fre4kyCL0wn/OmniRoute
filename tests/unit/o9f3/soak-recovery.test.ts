@@ -1,20 +1,29 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 
-import { generateEvidence } from "../../../open-sse/services/o9f3/observability/soakEvidence";
+import {
+  buildPreWindowShadowProbeIncident,
+  generateEvidence,
+} from "../../../open-sse/services/o9f3/observability/soakEvidence";
 import { evaluateSoakReadiness } from "../../../open-sse/services/o9f3/observability/readiness";
 import {
+  assertActiveWindowForInference,
+  classifyPreflightCall,
   evaluateStorageGuard,
   defaultSoakWindow,
+  selectRoutesFromCatalog,
 } from "../../../open-sse/services/o9f3/observability/soakRunner";
+import { persistWindowRequest } from "../../../open-sse/services/o9f3/observability/soakPersistence";
 import {
   addRequestEntry,
   completeWindow,
   initialSoakState,
   isMeaningfulRealRequest,
   recomputeDerived,
+  remainingWindowRequests,
   SoakRequestEntry,
   SoakState,
+  startWindowExecution,
 } from "../../../open-sse/services/o9f3/observability/soakState";
 
 function entry(id: string, overrides: Partial<SoakRequestEntry> = {}): SoakRequestEntry {
@@ -234,6 +243,139 @@ describe("O9-F3.2 soak recovery accounting", () => {
     assert.strictEqual(state.new_meaningful_requests, 7);
     assert.strictEqual(remaining, 13);
     assert.strictEqual(recomputeDerived(state).new_meaningful_requests, 7);
+  });
+
+  it("selects preflight routes from catalog data without real inference", () => {
+    let inferenceCalls = 0;
+    const window = defaultSoakWindow("preflight-only", ["s1"]);
+    const routes = selectRoutesFromCatalog(
+      {
+        models: [{ id: "catalog/free-model", costClass: "verified_free" }],
+        combos: [
+          {
+            name: "catalog-free",
+            models: [
+              {
+                model: "catalog/free-model",
+                providerId: "catalog",
+                costClass: "verified_free",
+                authorized: true,
+                executable: true,
+                health: "healthy",
+              },
+              {
+                model: "catalog/visible-unknown",
+                providerId: "catalog",
+                authorized: true,
+              },
+            ],
+          },
+        ],
+      },
+      window
+    );
+
+    assert.ok(routes.length > 0);
+    assert.strictEqual(inferenceCalls, 0);
+    assert.ok(routes.every((route) => route.catalogVisibility === "visible"));
+    assert.ok(routes.every((route) => route.authorizationStatus !== "unauthorized"));
+    assert.ok(routes.every((route) => route.policyStatus === "allowed"));
+    assert.ok(routes.some((route) => route.executabilityStatus === "known_executable"));
+    assert.ok(routes.some((route) => route.reasons.includes("cost_class:verified_free")));
+    assert.ok(!routes.some((route) => route.model === "catalog/visible-unknown"));
+    assert.strictEqual(classifyPreflightCall("/v1/models"), "control_plane");
+    assert.strictEqual(classifyPreflightCall("/v1/combos"), "control_plane");
+    assert.strictEqual(classifyPreflightCall("/v1/chat/completions"), "real_inference");
+  });
+
+  it("rejects real inference outside an active F3.2 window context", () => {
+    assert.throws(
+      () => assertActiveWindowForInference("/v1/chat/completions"),
+      /F3_2_INFERENCE_REQUIRES_ACTIVE_WINDOW/
+    );
+    assert.throws(
+      () =>
+        assertActiveWindowForInference("/v1/responses", {
+          activeWindowId: "w1",
+          windowId: "w2",
+        }),
+      /F3_2_INFERENCE_REQUIRES_ACTIVE_WINDOW/
+    );
+    assert.doesNotThrow(() =>
+      assertActiveWindowForInference("/v1/chat/completions", {
+        activeWindowId: "w1",
+        windowId: "w1",
+      })
+    );
+    assert.doesNotThrow(() => assertActiveWindowForInference("/v1/models"));
+  });
+
+  it("advances real request counters only after atomic durable persistence succeeds", () => {
+    const active = startWindowExecution({
+      windowId: "w1",
+      maxMeaningfulRequests: 20,
+      concurrency: 1,
+      sessionIds: ["s1"],
+    });
+    let durable = initialSoakState();
+    const failingStore = {
+      load: () => durable,
+      save: (_next: SoakState) => {
+        throw new Error("disk full");
+      },
+    };
+
+    assert.throws(
+      () => persistWindowRequest(failingStore, active, entry("persist-fail")),
+      /disk full/
+    );
+    assert.strictEqual(durable.new_meaningful_requests, 0);
+    assert.strictEqual(durable.cumulative_meaningful_requests, 20);
+
+    const store = {
+      load: () => durable,
+      save: (next: SoakState) => {
+        durable = next;
+      },
+    };
+    const persisted = persistWindowRequest(store, active, entry("persist-ok"));
+    assert.strictEqual(persisted.new_meaningful_requests, 1);
+    assert.strictEqual(durable.new_meaningful_requests, 1);
+    assert.strictEqual(durable.cumulative_meaningful_requests, 21);
+    assert.strictEqual(durable.request_entries[0].requestId, "persist-ok");
+  });
+
+  it("resumes interrupted windows by exact window-local remainder", () => {
+    let state = initialSoakState();
+    for (let i = 1; i <= 7; i++) {
+      state = addRequestEntry(state, entry(`w1-r${i}`, { windowId: "w1" }));
+    }
+    state = addRequestEntry(state, entry("w1-r7", { windowId: "w1" }));
+    state = addRequestEntry(state, entry("synthetic-w1", { windowId: "w1", synthetic: true }));
+    state = addRequestEntry(state, entry("w2-r1", { windowId: "w2" }));
+
+    assert.strictEqual(remainingWindowRequests(state, "w1", 20), 13);
+    assert.strictEqual(remainingWindowRequests(state, "w2", 20), 19);
+  });
+
+  it("keeps manual control-plane and prior Shadow probes out of soak counters forever", () => {
+    const state = initialSoakState();
+    const incident = buildPreWindowShadowProbeIncident();
+
+    assert.deepStrictEqual(
+      incident.probes.map((probe) => `${probe.route} -> ${probe.status}`),
+      ["auto/best-fast -> 200", "coding -> 200", "codex/gpt-5.5-low -> 200"]
+    );
+    assert.ok(incident.probes.every((probe) => probe.countedInSoak === false));
+    assert.ok(incident.probes.every((probe) => probe.promptsIncluded === false));
+    assert.ok(incident.probes.every((probe) => probe.responseContentIncluded === false));
+    assert.ok(incident.probes.every((probe) => probe.credentialsIncluded === false));
+    assert.strictEqual(state.new_meaningful_requests, 0);
+    assert.strictEqual(state.cumulative_meaningful_requests, 20);
+    assert.strictEqual(state.cumulative_successes, 20);
+    assert.strictEqual(state.cumulative_failures, 0);
+    assert.strictEqual(state.completed_real_windows, 0);
+    assert.strictEqual(state.request_entries.length, 0);
   });
 
   it("evaluates expanded and cutover-review readiness without auto-approving cutover", () => {

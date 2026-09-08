@@ -15,6 +15,69 @@ export interface SoakWindowDef {
   syntheticFailuresEnabled: boolean;
 }
 
+export interface SoakCatalogModel {
+  id?: string;
+  provider?: string;
+  model?: string;
+  costClass?: string;
+  cost_class?: string;
+  freeMarker?: boolean;
+  free_marker?: boolean;
+}
+
+export interface SoakCatalogComboModel {
+  kind?: string;
+  model?: string;
+  providerId?: string;
+  provider?: string;
+  costClass?: string;
+  cost_class?: string;
+  authorized?: boolean;
+  executable?: boolean;
+  health?: string;
+}
+
+export interface SoakCatalogCombo {
+  id?: string;
+  name?: string;
+  defaultPolicy?: string;
+  default_policy?: string;
+  costClass?: string;
+  cost_class?: string;
+  strategy?: string;
+  models?: SoakCatalogComboModel[];
+}
+
+export interface SoakCatalogSnapshot {
+  models: SoakCatalogModel[];
+  combos: SoakCatalogCombo[];
+}
+
+export type SoakCatalogVisibility = "visible" | "not_visible";
+export type SoakAuthorizationStatus = "authorized" | "unauthorized" | "unknown";
+export type SoakPolicyStatus = "allowed" | "rejected";
+export type SoakExecutabilityStatus = "known_executable" | "known_unavailable" | "unknown";
+
+export interface SoakSelectedRoute {
+  intent: string;
+  policy: string;
+  selectedCombo: string;
+  provider: string;
+  model: string;
+  costClass: string;
+  catalogVisibility: SoakCatalogVisibility;
+  authorizationStatus: SoakAuthorizationStatus;
+  policyStatus: SoakPolicyStatus;
+  executabilityStatus: SoakExecutabilityStatus;
+  healthStatus: string;
+  reasons: string[];
+}
+
+export interface SoakInferenceContext {
+  activeWindowId?: string;
+  windowId?: string;
+}
+
 export function defaultSoakWindow(windowId: string, sessionIds: string[]): SoakWindowDef {
   return {
     windowId,
@@ -77,4 +140,176 @@ export function isSyntheticRequest(requestType: string, enabled: boolean): boole
       requestType === "simulated_quota" ||
       requestType === "simulated_auth")
   );
+}
+
+function pathFromUrl(input: string): string {
+  try {
+    return new URL(input, "http://127.0.0.1:20131").pathname.replace(/\/+$/, "");
+  } catch {
+    return input.split("?")[0].replace(/\/+$/, "");
+  }
+}
+
+export function isControlPlanePath(pathOrUrl: string): boolean {
+  const path = pathFromUrl(pathOrUrl);
+  return path === "/v1/models" || path === "/v1/combos";
+}
+
+export function isRealInferencePath(pathOrUrl: string): boolean {
+  const path = pathFromUrl(pathOrUrl);
+  return (
+    path === "/v1/chat/completions" ||
+    path === "/v1/completions" ||
+    path === "/v1/responses" ||
+    path === "/v1/messages"
+  );
+}
+
+export function classifyPreflightCall(
+  pathOrUrl: string
+): "control_plane" | "real_inference" | "other" {
+  if (isControlPlanePath(pathOrUrl)) return "control_plane";
+  if (isRealInferencePath(pathOrUrl)) return "real_inference";
+  return "other";
+}
+
+export function assertActiveWindowForInference(
+  pathOrUrl: string,
+  ctx?: SoakInferenceContext
+): void {
+  if (!isRealInferencePath(pathOrUrl)) return;
+  if (!ctx?.activeWindowId || !ctx.windowId || ctx.activeWindowId !== ctx.windowId) {
+    throw new Error("F3_2_INFERENCE_REQUIRES_ACTIVE_WINDOW");
+  }
+}
+
+function normalizeCostClass(value: string | undefined, modelId: string): string {
+  if (value) return value;
+  if (modelId.includes(":free") || modelId.includes("/free")) return "verified_free";
+  return "unknown";
+}
+
+function modelKey(model: SoakCatalogModel): string {
+  return model.id || (model.provider && model.model ? `${model.provider}/${model.model}` : "");
+}
+
+function comboKey(combo: SoakCatalogCombo): string {
+  return combo.id || combo.name || "";
+}
+
+function passesPolicy(costClass: string, policy: string): boolean {
+  if (policy === "free_only") return costClass === "verified_free";
+  if (policy === "free_first")
+    return ["verified_free", "subscription_included"].includes(costClass);
+  if (policy === "subscription_first")
+    return ["subscription_included", "verified_free"].includes(costClass);
+  return costClass === "verified_free" || costClass === "subscription_included";
+}
+
+function policyRank(costClass: string, policy: string): number {
+  if (policy === "free_only") return costClass === "verified_free" ? 400 : 0;
+  if (policy === "free_first") {
+    if (costClass === "verified_free") return 300;
+    if (costClass === "subscription_included") return 200;
+    if (costClass === "paid") return 100;
+  }
+  if (policy === "subscription_first") {
+    if (costClass === "subscription_included") return 300;
+    if (costClass === "verified_free") return 200;
+    if (costClass === "paid") return 100;
+  }
+  return costClass === "unknown" ? 0 : 50;
+}
+
+export function selectRoutesFromCatalog(
+  snapshot: SoakCatalogSnapshot,
+  windowDef: SoakWindowDef
+): SoakSelectedRoute[] {
+  const modelCosts = new Map<string, string>();
+  for (const model of snapshot.models) {
+    const id = modelKey(model);
+    if (!id) continue;
+    modelCosts.set(id, normalizeCostClass(model.costClass || model.cost_class, id));
+  }
+
+  const candidates: SoakSelectedRoute[] = [];
+  for (const combo of snapshot.combos) {
+    const selectedCombo = comboKey(combo);
+    if (!selectedCombo) continue;
+    const comboCost = combo.costClass || combo.cost_class;
+    for (const member of combo.models || []) {
+      const model = member.model || "";
+      if (!model) continue;
+      const provider = member.providerId || member.provider || model.split("/")[0] || "unknown";
+      const costClass = normalizeCostClass(
+        member.costClass || member.cost_class || modelCosts.get(model) || comboCost,
+        model
+      );
+      for (const policy of windowDef.policyVariants) {
+        const policyAllowed = passesPolicy(costClass, policy);
+        const authorizationStatus: SoakAuthorizationStatus =
+          member.authorized === true
+            ? "authorized"
+            : member.authorized === false
+              ? "unauthorized"
+              : "unknown";
+        const executabilityStatus: SoakExecutabilityStatus =
+          member.executable === true
+            ? "known_executable"
+            : member.executable === false
+              ? "known_unavailable"
+              : "unknown";
+        const healthStatus = member.health || "unknown";
+        const reasons = [
+          "catalog_visibility:visible",
+          `authorization:${authorizationStatus}`,
+          `policy:${policyAllowed ? "allowed" : "rejected"}`,
+          `cost_class:${costClass}`,
+          `executability:${executabilityStatus}`,
+          `health:${healthStatus}`,
+        ];
+        if (
+          !policyAllowed ||
+          authorizationStatus === "unauthorized" ||
+          executabilityStatus === "known_unavailable"
+        ) {
+          continue;
+        }
+        for (const intent of windowDef.intentCategories) {
+          candidates.push({
+            intent,
+            policy,
+            selectedCombo,
+            provider,
+            model,
+            costClass,
+            catalogVisibility: "visible",
+            authorizationStatus,
+            policyStatus: "allowed",
+            executabilityStatus,
+            healthStatus,
+            reasons,
+          });
+        }
+      }
+    }
+  }
+
+  return candidates
+    .sort((a, b) => {
+      const execDelta =
+        (b.executabilityStatus === "known_executable" ? 1 : 0) -
+        (a.executabilityStatus === "known_executable" ? 1 : 0);
+      if (execDelta !== 0) return execDelta;
+      const authDelta =
+        (b.authorizationStatus === "authorized" ? 1 : 0) -
+        (a.authorizationStatus === "authorized" ? 1 : 0);
+      if (authDelta !== 0) return authDelta;
+      const policyDelta = policyRank(b.costClass, b.policy) - policyRank(a.costClass, a.policy);
+      if (policyDelta !== 0) return policyDelta;
+      return `${a.intent}:${a.policy}:${a.selectedCombo}:${a.model}`.localeCompare(
+        `${b.intent}:${b.policy}:${b.selectedCombo}:${b.model}`
+      );
+    })
+    .slice(0, windowDef.maxMeaningfulRequests);
 }

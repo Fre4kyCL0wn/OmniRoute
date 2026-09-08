@@ -51,6 +51,19 @@ export interface SoakWindowEntry {
   requestIds: string[];
 }
 
+export interface ActiveSoakWindow {
+  windowId: string;
+  maxMeaningfulRequests: number;
+  concurrency: number;
+  sessionIds: string[];
+}
+
+export interface ControlPlaneProbe {
+  path: string;
+  status: number;
+  at: string;
+}
+
 export interface SoakState {
   schema_version: string;
   phase: string;
@@ -212,6 +225,50 @@ export function addRequestEntry(state: SoakState, entry: SoakRequestEntry): Soak
   // Deduplicate by requestId — never double-count (also after resume).
   if (state.request_entries.some((e) => e.requestId === entry.requestId)) return state;
   return recomputeDerived({ ...state, request_entries: [...state.request_entries, entry] });
+}
+
+export function startWindowExecution(def: ActiveSoakWindow): ActiveSoakWindow {
+  if (!def.windowId) throw new Error("F3_2_WINDOW_ID_REQUIRED");
+  if (def.concurrency !== 1) throw new Error("F3_2_WINDOW_CONCURRENCY_MUST_BE_ONE");
+  if (def.maxMeaningfulRequests <= 0) throw new Error("F3_2_WINDOW_MAX_REQUIRED");
+  return { ...def, sessionIds: Array.from(new Set(def.sessionIds)) };
+}
+
+export function assertRequestInActiveWindow(
+  active: ActiveSoakWindow | null,
+  entry: SoakRequestEntry
+): void {
+  if (!active || active.windowId !== entry.windowId) {
+    throw new Error("F3_2_REAL_REQUEST_REQUIRES_ACTIVE_WINDOW");
+  }
+}
+
+export function remainingWindowRequests(
+  state: SoakState,
+  windowId: string,
+  maxMeaningfulRequests: number
+): number {
+  const completed = state.request_entries.filter(
+    (entry) => entry.windowId === windowId && isMeaningfulRealRequest(entry)
+  ).length;
+  return Math.max(0, maxMeaningfulRequests - completed);
+}
+
+export function recordWindowRequest(
+  state: SoakState,
+  active: ActiveSoakWindow | null,
+  entry: SoakRequestEntry
+): SoakState {
+  if (isMeaningfulRealRequest(entry)) assertRequestInActiveWindow(active, entry);
+  return addRequestEntry(state, entry);
+}
+
+export function classifyManualControlPlaneProbe(
+  state: SoakState,
+  _probe: ControlPlaneProbe
+): SoakState {
+  // Control-plane probes (/v1/models, /v1/combos) are preflight-only and never soak evidence.
+  return recomputeDerived(state);
 }
 
 export function computeWindowSummary(
