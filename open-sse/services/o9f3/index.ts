@@ -23,3 +23,39 @@ export {
   setAffinedRoute,
   clearAffinedRoute,
 } from "./sessionAffinity";
+
+/* -------------------------------------------------------------- */
+/* O9-F3 — Observability                                         */
+/* -------------------------------------------------------------- */
+
+export {
+  createTraceId,
+  storeTrace,
+  getTrace,
+  getAllTraces,
+  clearTraces,
+  getTraceCount,
+  ObservationTrace,
+  RejectedCandidate,
+  RouteSwitch,
+  Protocol,
+  CostClass,
+  HealthState,
+  FailureClass,
+} from "./observability/traceStore";
+
+export {
+  aggregateMetrics,
+  buildRouteScoreboard,
+  analyzeSessionStability,
+  ScoreboardEntry,
+  MIN_SAMPLES_FOR_SCOREBOARD,
+  SessionStability,
+} from "./observability/metrics";
+
+export {
+  InternalStatus,
+  ReadinessState,
+  buildInternalStatus,
+  evaluateReadiness,
+} from "./observability/status";
