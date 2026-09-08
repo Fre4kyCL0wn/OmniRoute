@@ -8,17 +8,14 @@
 
 import { aggregateMetrics } from "./metrics";
 import { analyzeSessionStability, buildRouteScoreboard } from "./metrics";
-import { getTraceCount, getAllTraces } from "./traceStore";
+import { getAllTraces } from "./traceStore";
 
 /* ------------------------------------------------------------------ */
 /* Status state                                                       */
 /* ------------------------------------------------------------------ */
 
 export type ReadinessState =
-  | "NOT_READY"
-  | "OBSERVING"
-  | "READY_FOR_EXPANDED_CANARY"
-  | "READY_FOR_CUTOVER_REVIEW";
+  "NOT_READY" | "OBSERVING" | "READY_FOR_EXPANDED_CANARY" | "READY_FOR_CUTOVER_REVIEW";
 
 export interface InternalStatus {
   /** Timestamp (epoch ms) */
@@ -176,14 +173,16 @@ export function buildInternalStatus(): InternalStatus {
   const traces = getAllTraces(sinceMs);
 
   // Canary info (last success)
-  const lastSuccessfulTrace = traces.filter(t => t.success).sort((a, b) => b.timestamp - a.timestamp)[0];
+  const lastSuccessfulTrace = traces
+    .filter((t) => t.success)
+    .sort((a, b) => b.timestamp - a.timestamp)[0];
   const canaryLastSuccess = lastSuccessfulTrace ? lastSuccessfulTrace.timestamp : null;
 
   // Shadow health
-  const shadowHealthy = traces.filter(t => t.success).length > 0;
+  const shadowHealthy = traces.filter((t) => t.success).length > 0;
 
   // Auth functional check (no auth failures in last 24h)
-  const authFailures = traces.filter(t => t.failureClass === "auth_failure").length;
+  const authFailures = traces.filter((t) => t.failureClass === "auth_failure").length;
 
   // Canary launcher functional
   const canaryLauncherFunctional = authFailures === 0;
@@ -199,8 +198,8 @@ export function buildInternalStatus(): InternalStatus {
   const unexpectedPaidEscalation = aggregated.cost.unexpectedPaidEscalations > 0;
   const freeOnlyViolation = aggregated.executability.clientRestrictedTargets > 0; // proxy for policy violations
   const excessiveRouteSwitching = aggregated.failover.avgRouteSwitches > 3;
-  const zeroExecutableCandidateForCriticalIntent = aggregated.traffic.byIntent["coding"] > 0
-    && aggregated.traffic.byModel["coding"] === 0;
+  const zeroExecutableCandidateForCriticalIntent =
+    aggregated.traffic.byIntent["coding"] > 0 && aggregated.traffic.byModel["coding"] === 0;
   const failClosedRegression = false; // Would need historical baseline
   const abnormalErrorRate = aggregated.traffic.errorRate > 10;
 
@@ -209,7 +208,8 @@ export function buildInternalStatus(): InternalStatus {
     readiness: "OBSERVING" as ReadinessState,
     canary: {
       lastSuccess: canaryLastSuccess,
-      provider: aggregated.traffic.byProvider["claude"] || aggregated.traffic.byProvider["openai"] || null,
+      provider:
+        aggregated.traffic.byProvider["claude"] || aggregated.traffic.byProvider["openai"] || null,
       model: aggregated.traffic.byModel["claude-sonnet-4"] || null,
       totalRequests: aggregated.traffic.requests,
       successRate: aggregated.traffic.successRate,

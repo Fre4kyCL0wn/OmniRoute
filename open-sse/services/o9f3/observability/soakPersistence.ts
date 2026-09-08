@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, copyFileSync, unlinkSync, renameSync } from "node:fs";
 
 import {
@@ -193,6 +194,43 @@ export function loadBackup(store: AtomicSoakStore): SoakState {
   } catch {
     throw new Error("F3_2_BACKUP_UNAVAILABLE: no valid primary or backup state");
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Privileged state persistence hardening — host helper boundary      */
+/* ------------------------------------------------------------------ */
+
+const O9_F3_2_PRIVILEGED_HELPER_PATH = "/usr/local/sbin/o9-f3-2-soak-state-helper";
+const O9_F3_2_PRIVILEGED_STATE_FILENAME = "o9-f3-2-soak-state.json";
+
+function runPrivilegedStateHelper(command: "read" | "replace", input?: string): string {
+  return execFileSync(
+    "sudo",
+    [O9_F3_2_PRIVILEGED_HELPER_PATH, command, O9_F3_2_PRIVILEGED_STATE_FILENAME],
+    {
+      input,
+      encoding: "utf-8",
+      maxBuffer: 2 * 1024 * 1024,
+    }
+  );
+}
+
+/**
+ * Create the only supported F3.2 store for the canonical privileged soak state.
+ *
+ * The canonical state file stays root:root 0600. The unprivileged runner cannot read or
+ * replace it directly; it must cross the hardcoded helper + dedicated sudoers boundary.
+ */
+export function createPrivilegedF32SoakStore(): AtomicSoakStore {
+  return {
+    load(): SoakState {
+      return JSON.parse(runPrivilegedStateHelper("read")) as SoakState;
+    },
+    save(next: SoakState): void {
+      assertStateInvariant(next);
+      runPrivilegedStateHelper("replace", JSON.stringify(next, null, 2));
+    },
+  };
 }
 
 /* ------------------------------------------------------------------ */

@@ -10,6 +10,7 @@ import {
   atomicWriteJsonFile,
   backupRotate,
   createHardenedSoakStore,
+  createPrivilegedF32SoakStore,
   hardenedValidatedLoad,
   hardenedValidatedSave,
   loadBackup,
@@ -381,6 +382,12 @@ describe("O9-F3.2 privileged state persistence hardening", () => {
     const emptyDir = mkdtempSync(join(tmpdir(), "o9f3-nostate-"));
     const store = createHardenedSoakStore(join(emptyDir, "nope.json"));
     assert.throws(() => loadBackup(store), /F3_2_BACKUP_UNAVAILABLE/);
+  });
+
+  it("createPrivilegedF32SoakStore exposes the canonical privileged store factory", () => {
+    const store = createPrivilegedF32SoakStore();
+    assert.strictEqual(typeof store.load, "function");
+    assert.strictEqual(typeof store.save, "function");
   });
 
   it("persistWindowRequest still enforces sanitization and atomic durability after hardening", () => {

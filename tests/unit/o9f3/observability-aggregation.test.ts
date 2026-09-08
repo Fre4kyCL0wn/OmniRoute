@@ -14,8 +14,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 
-import { aggregateMetrics, buildRouteScoreboard, analyzeSessionStability } from "../../../open-sse/services/o9f3/observability/metrics";
-import { createTraceId, storeTrace, getTraceCount, clearTraces } from "../../../open-sse/services/o9f3/observability/traceStore";
+import { aggregateMetrics } from "../../../open-sse/services/o9f3/observability/metrics";
+import {
+  storeTrace,
+  getTraceCount,
+  clearTraces,
+} from "../../../open-sse/services/o9f3/observability/traceStore";
 
 // Minimal test covering empty dataset
 
@@ -69,12 +73,13 @@ describe("F3 observability", () => {
   });
 
   it("rejects production endpoint targeting", () => {
-    const productionEndpoints = [
-      "http://127.0.0.1:20128",
-      "http://localhost:20128",
-    ];
+    const productionEndpoints = ["http://127.0.0.1:20128", "http://localhost:20128"];
     for (const end of productionEndpoints) {
-      assert.notStrictEqual(end.includes("20128"), false, "Production endpoint must never be targeted by F3 harness");
+      assert.notStrictEqual(
+        end.includes("20128"),
+        false,
+        "Production endpoint must never be targeted by F3 harness"
+      );
     }
   });
 });
