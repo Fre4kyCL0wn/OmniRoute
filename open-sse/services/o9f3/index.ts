@@ -35,6 +35,8 @@ export {
   getAllTraces,
   clearTraces,
   getTraceCount,
+} from "./observability/traceStore";
+export type {
   ObservationTrace,
   RejectedCandidate,
   RouteSwitch,
@@ -48,14 +50,9 @@ export {
   aggregateMetrics,
   buildRouteScoreboard,
   analyzeSessionStability,
-  ScoreboardEntry,
   MIN_SAMPLES_FOR_SCOREBOARD,
-  SessionStability,
 } from "./observability/metrics";
+export type { ScoreboardEntry, SessionStability } from "./observability/metrics";
 
-export {
-  InternalStatus,
-  ReadinessState,
-  buildInternalStatus,
-  evaluateReadiness,
-} from "./observability/status";
+export { buildInternalStatus, evaluateReadiness } from "./observability/status";
+export type { InternalStatus, ReadinessState } from "./observability/status";

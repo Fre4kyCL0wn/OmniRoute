@@ -79,14 +79,17 @@ export interface AggregatedMetrics {
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
-  const idx = Math.ceil(p / 100 * sorted.length) - 1;
+  const idx = Math.ceil((p / 100) * sorted.length) - 1;
   return sorted[Math.max(0, idx)];
 }
 
 function computeLatencyPercentiles(latencies: number[]): LatencyPercentiles {
   const sorted = [...latencies].sort((a, b) => a - b);
   return {
-    avg: latencies.length > 0 ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : 0,
+    avg:
+      latencies.length > 0
+        ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+        : 0,
     p50: percentile(sorted, 50),
     p95: percentile(sorted, 95),
     p99: percentile(sorted, 99),
@@ -160,7 +163,8 @@ export function aggregateMetrics(sinceMs: number = 0): AggregatedMetrics {
     safeIncrement(byPolicy, t.activePolicy);
 
     // Success/error
-    if (t.success) successCount++; else errorCount++;
+    if (t.success) successCount++;
+    else errorCount++;
     if (t.routeSwitchCount > 0) fallbackCount++;
     totalRouteSwitches += t.routeSwitchCount;
 
@@ -225,9 +229,14 @@ export function aggregateMetrics(sinceMs: number = 0): AggregatedMetrics {
     health: healthCounts,
     failover: {
       totalFailovers: fallbackCount,
-      failoverSuccessRate: fallbackCount > 0
-        ? Math.round(((fallbackCount - Object.values(failureClasses).reduce((a, b) => a + b, 0)) / fallbackCount) * 10000) / 100
-        : 100,
+      failoverSuccessRate:
+        fallbackCount > 0
+          ? Math.round(
+              ((fallbackCount - Object.values(failureClasses).reduce((a, b) => a + b, 0)) /
+                fallbackCount) *
+                10000
+            ) / 100
+          : 100,
       avgRouteSwitches: total > 0 ? Math.round((totalRouteSwitches / total) * 100) / 100 : 0,
       commonFailureClasses: failureClasses,
       commonFallbackPaths: fallbackPaths,
@@ -253,9 +262,26 @@ function emptyMetrics(): AggregatedMetrics {
       byPolicy: {},
     },
     health: { healthy: 0, degraded: 0, cooldown: 0, authFailed: 0, unavailable: 0 },
-    failover: { totalFailovers: 0, failoverSuccessRate: 100, avgRouteSwitches: 0, commonFailureClasses: {}, commonFallbackPaths: {} },
-    cost: { verifiedFreeRequests: 0, subscriptionRequests: 0, paidRequests: 0, mixedUnknownRequests: 0, unexpectedPaidEscalations: 0 },
-    executability: { filteredNonExecutable: 0, missingAuthDependencies: 0, missingProviderDependencies: 0, clientRestrictedTargets: 0 },
+    failover: {
+      totalFailovers: 0,
+      failoverSuccessRate: 100,
+      avgRouteSwitches: 0,
+      commonFailureClasses: {},
+      commonFallbackPaths: {},
+    },
+    cost: {
+      verifiedFreeRequests: 0,
+      subscriptionRequests: 0,
+      paidRequests: 0,
+      mixedUnknownRequests: 0,
+      unexpectedPaidEscalations: 0,
+    },
+    executability: {
+      filteredNonExecutable: 0,
+      missingAuthDependencies: 0,
+      missingProviderDependencies: 0,
+      clientRestrictedTargets: 0,
+    },
     timestamp: Date.now(),
   };
 }
@@ -282,7 +308,7 @@ export interface ScoreboardEntry {
   sampleWarning: boolean;
 }
 
-const MIN_SAMPLES_FOR_SCOREBOARD = 5;
+export const MIN_SAMPLES_FOR_SCOREBOARD = 5;
 
 export function buildRouteScoreboard(sinceMs: number = 0): ScoreboardEntry[] {
   const traces = getAllTraces(sinceMs);
@@ -298,10 +324,15 @@ export function buildRouteScoreboard(sinceMs: number = 0): ScoreboardEntry[] {
 
   for (const [route, entries] of byRoute) {
     const [combo, provider, model] = route.split("/");
-    const latencies = entries.filter(e => e.latencyMs > 0).map(e => e.latencyMs).sort((a, b) => a - b);
-    const successes = entries.filter(e => e.success).length;
-    const cooldownEvents = entries.filter(e => e.healthBefore === "cooldown" || e.cooldownUntilMs !== null).length;
-    const recoveries = entries.filter(e => e.reprobeResult === true).length;
+    const latencies = entries
+      .filter((e) => e.latencyMs > 0)
+      .map((e) => e.latencyMs)
+      .sort((a, b) => a - b);
+    const successes = entries.filter((e) => e.success).length;
+    const cooldownEvents = entries.filter(
+      (e) => e.healthBefore === "cooldown" || e.cooldownUntilMs !== null
+    ).length;
+    const recoveries = entries.filter((e) => e.reprobeResult === true).length;
 
     scoreboard.push({
       route: combo,
@@ -310,9 +341,12 @@ export function buildRouteScoreboard(sinceMs: number = 0): ScoreboardEntry[] {
       attempts: entries.length,
       successes,
       successRate: entries.length > 0 ? Math.round((successes / entries.length) * 10000) / 100 : 0,
-      avgLatencyMs: latencies.length > 0 ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : 0,
+      avgLatencyMs:
+        latencies.length > 0
+          ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+          : 0,
       p95LatencyMs: percentile(latencies, 95),
-      failoversTriggered: entries.filter(e => e.routeSwitchCount > 0).length,
+      failoversTriggered: entries.filter((e) => e.routeSwitchCount > 0).length,
       cooldownEvents,
       recoveries,
       costClass: entries[0]?.costClass || "unknown",
@@ -376,11 +410,15 @@ export function analyzeSessionStability(sinceMs: number = 0): SessionStability[]
     let stableRoute: string | null = null;
     let maxCount = 0;
     for (const [route, count] of routeCounts) {
-      if (count > maxCount) { maxCount = count; stableRoute = route; }
+      if (count > maxCount) {
+        maxCount = count;
+        stableRoute = route;
+      }
     }
 
     // Thrashing: > 3 route switches in < 10 requests OR > 50% of requests are switches
-    const thrashing = routeSwitches > 3 || (sorted.length > 0 && routeSwitches / sorted.length > 0.5);
+    const thrashing =
+      routeSwitches > 3 || (sorted.length > 0 && routeSwitches / sorted.length > 0.5);
 
     stability.push({
       sessionId,
