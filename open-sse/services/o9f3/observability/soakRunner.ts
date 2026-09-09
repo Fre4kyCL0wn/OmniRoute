@@ -2,6 +2,8 @@
  * F3.2 — Bounded real soak window execution (pure logic; real traffic executed by caller).
  */
 
+import { UNRESOLVED_LEAF_MODEL, normalizeLeafModelId, normalizeProviderId } from "./soakState";
+
 export interface SoakWindowDef {
   windowId: string;
   maxMeaningfulRequests: number;
@@ -183,10 +185,31 @@ export function assertActiveWindowForInference(
   }
 }
 
-function normalizeCostClass(value: string | undefined, modelId: string): string {
-  if (value) return value;
-  if (modelId.includes(":free") || modelId.includes("/free")) return "verified_free";
+export function classifyObservableCostClass(input: {
+  provider?: string | null;
+  model?: string | null;
+  costUsd?: number | string | null;
+  catalogCostClass?: string | null;
+  freeMarker?: boolean | null;
+}): string {
+  const provider = normalizeProviderId(input.provider);
+  const model = normalizeLeafModelId(input.model);
+  if (input.catalogCostClass) return input.catalogCostClass;
+  if (input.freeMarker === true && model !== UNRESOLVED_LEAF_MODEL) return "verified_free";
+  if (provider === "claude") return "subscription_included";
+  if (Number(input.costUsd) > 0) return "paid";
+  if (model && /(?:^|[/:.-])free$/i.test(model) && model !== UNRESOLVED_LEAF_MODEL) {
+    return "verified_free";
+  }
   return "unknown";
+}
+
+function normalizeCostClass(
+  value: string | undefined,
+  modelId: string,
+  freeMarker?: boolean
+): string {
+  return classifyObservableCostClass({ model: modelId, catalogCostClass: value, freeMarker });
 }
 
 function modelKey(model: SoakCatalogModel): string {
@@ -229,7 +252,14 @@ export function selectRoutesFromCatalog(
   for (const model of snapshot.models) {
     const id = modelKey(model);
     if (!id) continue;
-    modelCosts.set(id, normalizeCostClass(model.costClass || model.cost_class, id));
+    modelCosts.set(
+      id,
+      normalizeCostClass(
+        model.costClass || model.cost_class,
+        id,
+        model.freeMarker || model.free_marker
+      )
+    );
   }
 
   const candidates: SoakSelectedRoute[] = [];
@@ -240,10 +270,13 @@ export function selectRoutesFromCatalog(
     for (const member of combo.models || []) {
       const model = member.model || "";
       if (!model) continue;
-      const provider = member.providerId || member.provider || model.split("/")[0] || "unknown";
+      const provider =
+        normalizeProviderId(member.providerId || member.provider || model.split("/")[0]) ||
+        "unknown";
       const costClass = normalizeCostClass(
         member.costClass || member.cost_class || modelCosts.get(model) || comboCost,
-        model
+        model,
+        false
       );
       for (const policy of windowDef.policyVariants) {
         const policyAllowed = passesPolicy(costClass, policy);
@@ -281,7 +314,7 @@ export function selectRoutesFromCatalog(
             policy,
             selectedCombo,
             provider,
-            model,
+            model: normalizeLeafModelId(model) || model,
             costClass,
             catalogVisibility: "visible",
             authorizationStatus,

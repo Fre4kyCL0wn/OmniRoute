@@ -202,17 +202,18 @@ export function loadBackup(store: AtomicSoakStore): SoakState {
 
 const O9_F3_2_PRIVILEGED_HELPER_PATH = "/usr/local/sbin/o9-f3-2-soak-state-helper";
 const O9_F3_2_PRIVILEGED_STATE_FILENAME = "o9-f3-2-soak-state.json";
+const O9_F3_2_PRIVILEGED_EVIDENCE_FILENAME = "o9-f3-2-window1-evidence.json";
 
-function runPrivilegedStateHelper(command: "read" | "replace", input?: string): string {
-  return execFileSync(
-    "sudo",
-    [O9_F3_2_PRIVILEGED_HELPER_PATH, command, O9_F3_2_PRIVILEGED_STATE_FILENAME],
-    {
-      input,
-      encoding: "utf-8",
-      maxBuffer: 2 * 1024 * 1024,
-    }
-  );
+function runPrivilegedStateHelper(
+  command: "read" | "replace" | "write-evidence",
+  filename: string,
+  input?: string
+): string {
+  return execFileSync("sudo", [O9_F3_2_PRIVILEGED_HELPER_PATH, command, filename], {
+    input,
+    encoding: "utf-8",
+    maxBuffer: 2 * 1024 * 1024,
+  });
 }
 
 /**
@@ -224,13 +225,25 @@ function runPrivilegedStateHelper(command: "read" | "replace", input?: string): 
 export function createPrivilegedF32SoakStore(): AtomicSoakStore {
   return {
     load(): SoakState {
-      return JSON.parse(runPrivilegedStateHelper("read")) as SoakState;
+      return JSON.parse(
+        runPrivilegedStateHelper("read", O9_F3_2_PRIVILEGED_STATE_FILENAME)
+      ) as SoakState;
     },
     save(next: SoakState): void {
       assertStateInvariant(next);
-      runPrivilegedStateHelper("replace", JSON.stringify(next, null, 2));
+      runPrivilegedStateHelper(
+        "replace",
+        O9_F3_2_PRIVILEGED_STATE_FILENAME,
+        JSON.stringify(next, null, 2)
+      );
     },
   };
+}
+
+export function writePrivilegedF32Evidence(evidence: unknown): string {
+  const serialized = JSON.stringify(evidence, null, 2);
+  runPrivilegedStateHelper("write-evidence", O9_F3_2_PRIVILEGED_EVIDENCE_FILENAME, serialized);
+  return O9_F3_2_PRIVILEGED_EVIDENCE_FILENAME;
 }
 
 /* ------------------------------------------------------------------ */

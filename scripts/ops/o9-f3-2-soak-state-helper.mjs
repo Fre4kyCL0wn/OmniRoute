@@ -21,7 +21,9 @@ import { dirname, join } from "node:path";
 
 const CANONICAL_DIR = "/srv/jarvis/evidence";
 const CANONICAL_FILE = "o9-f3-2-soak-state.json";
+const CANONICAL_EVIDENCE_FILE = "o9-f3-2-window1-evidence.json";
 const CANONICAL_PATH = join(CANONICAL_DIR, CANONICAL_FILE);
+const CANONICAL_EVIDENCE_PATH = join(CANONICAL_DIR, CANONICAL_EVIDENCE_FILE);
 const REQUIRED_MODE = 0o600;
 const MAX_STATE_BYTES = 1024 * 1024;
 const SCHEMA_VERSION = "o9-f3.2-v2";
@@ -34,9 +36,10 @@ function fail(message) {
   process.exit(1);
 }
 
-function assertAllowedFilename(filename) {
-  if (filename !== CANONICAL_FILE) {
-    fail(`F3_2_HELPER_BAD_FILENAME: expected ${CANONICAL_FILE}`);
+function assertAllowedFilename(filename, command) {
+  const allowed = command === "write-evidence" ? CANONICAL_EVIDENCE_FILE : CANONICAL_FILE;
+  if (filename !== allowed) {
+    fail(`F3_2_HELPER_BAD_FILENAME: expected ${allowed}`);
   }
   if (filename.includes("/") || filename.includes("\\") || filename.includes("..")) {
     fail("F3_2_HELPER_TRAVERSAL_REJECTED");
@@ -167,18 +170,18 @@ function fsyncFile(path) {
   }
 }
 
-function atomicReplaceCanonical(raw) {
+function atomicReplace(path, tempStem, raw, validate, requireExisting) {
   if (Buffer.byteLength(raw, "utf8") > MAX_STATE_BYTES) fail("F3_2_HELPER_INPUT_TOO_LARGE");
-  assertSoakStateSchema(parseState(raw));
-  assertRegularRootOnly(CANONICAL_PATH);
+  validate(raw);
+  if (requireExisting) assertRegularRootOnly(path);
 
-  const tmpPath = join(CANONICAL_DIR, `.o9-f3-2-soak-state.json.tmp.${process.pid}`);
+  const tmpPath = join(CANONICAL_DIR, `.${tempStem}.tmp.${process.pid}`);
   assertSameDirectoryTemp(tmpPath);
   writeFileSync(tmpPath, raw, { encoding: "utf8", mode: REQUIRED_MODE, flag: "wx" });
   try {
     fsyncFile(tmpPath);
-    renameSync(tmpPath, CANONICAL_PATH);
-    assertRegularRootOnly(CANONICAL_PATH);
+    renameSync(tmpPath, path);
+    assertRegularRootOnly(path);
   } catch (error) {
     try {
       unlinkSync(tmpPath);
@@ -189,9 +192,72 @@ function atomicReplaceCanonical(raw) {
   }
 }
 
+function assertEvidenceSchema(evidence) {
+  assertObject(evidence, "evidence");
+  if (evidence.branch !== "phase/o9-f3-2-long-soak") fail("F3_2_HELPER_EVIDENCE_BRANCH_REJECTED");
+  if (evidence.phase !== "F3.2_LONG_SOAK") fail("F3_2_HELPER_EVIDENCE_PHASE_REJECTED");
+  if (evidence.production_modified !== false) fail("F3_2_HELPER_EVIDENCE_PRODUCTION_REJECTED");
+  if (evidence.ut99_modified !== false) fail("F3_2_HELPER_EVIDENCE_UT99_REJECTED");
+  if (evidence.cutover_performed !== false) fail("F3_2_HELPER_EVIDENCE_CUTOVER_REJECTED");
+  for (const key of ["f3_2_request_ids", "f3_2_session_ids", "f3_2_window_evidence"]) {
+    assertArray(evidence[key], key);
+  }
+  for (const key of [
+    "f3_2_new_meaningful_requests",
+    "f3_2_new_successes",
+    "f3_2_new_failures",
+    "f3_2_cumulative_meaningful_requests",
+    "f3_2_cumulative_successes",
+    "f3_2_cumulative_failures",
+    "f3_2_completed_real_windows",
+    "f3_2_policy_violations",
+  ]) {
+    if (!Number.isInteger(evidence[key]) || evidence[key] < 0) {
+      fail(`F3_2_HELPER_EVIDENCE_SCHEMA_REJECTED:${key}`);
+    }
+  }
+}
+
+function atomicReplaceCanonical(raw) {
+  atomicReplace(
+    CANONICAL_PATH,
+    "o9-f3-2-soak-state.json",
+    raw,
+    (text) => assertSoakStateSchema(parseState(text)),
+    true
+  );
+}
+
+function atomicWriteEvidence(raw) {
+  const canonical = readCanonicalRaw();
+  const canonicalState = parseState(canonical);
+  atomicReplace(
+    CANONICAL_EVIDENCE_PATH,
+    "o9-f3-2-window1-evidence.json",
+    raw,
+    (text) => {
+      const evidence = parseState(text);
+      assertEvidenceSchema(evidence);
+      if (evidence.f3_2_new_meaningful_requests !== canonicalState.new_meaningful_requests) {
+        fail("F3_2_HELPER_EVIDENCE_STATE_MISMATCH:new_meaningful");
+      }
+      if (evidence.f3_2_new_successes !== canonicalState.new_successes) {
+        fail("F3_2_HELPER_EVIDENCE_STATE_MISMATCH:new_successes");
+      }
+      if (evidence.f3_2_new_failures !== canonicalState.new_failures) {
+        fail("F3_2_HELPER_EVIDENCE_STATE_MISMATCH:new_failures");
+      }
+      if (evidence.f3_2_completed_real_windows !== canonicalState.completed_real_windows) {
+        fail("F3_2_HELPER_EVIDENCE_STATE_MISMATCH:windows");
+      }
+    },
+    false
+  );
+}
+
 async function main() {
   const [command, filename] = process.argv.slice(2);
-  assertAllowedFilename(filename || "");
+  assertAllowedFilename(filename || "", command);
 
   if (command === "read") {
     process.stdout.write(readCanonicalRaw());
@@ -202,6 +268,13 @@ async function main() {
     const input = readFileSync(0, "utf8");
     atomicReplaceCanonical(input);
     process.stdout.write("F3_2_HELPER_REPLACE_OK\n");
+    return;
+  }
+
+  if (command === "write-evidence") {
+    const input = readFileSync(0, "utf8");
+    atomicWriteEvidence(input);
+    process.stdout.write("F3_2_HELPER_EVIDENCE_OK\n");
     return;
   }
 

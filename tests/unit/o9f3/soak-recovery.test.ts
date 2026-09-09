@@ -15,7 +15,9 @@ import {
 } from "../../../open-sse/services/o9f3/observability/soakRunner";
 import { persistWindowRequest } from "../../../open-sse/services/o9f3/observability/soakPersistence";
 import {
+  UNRESOLVED_LEAF_MODEL,
   addRequestEntry,
+  amendRequestClassification,
   completeWindow,
   initialSoakState,
   isMeaningfulRealRequest,
@@ -25,6 +27,7 @@ import {
   SoakState,
   startWindowExecution,
 } from "../../../open-sse/services/o9f3/observability/soakState";
+import { classifyObservableCostClass } from "../../../open-sse/services/o9f3/observability/soakRunner";
 
 function entry(id: string, overrides: Partial<SoakRequestEntry> = {}): SoakRequestEntry {
   return {
@@ -243,6 +246,136 @@ describe("O9-F3.2 soak recovery accounting", () => {
     assert.strictEqual(state.new_meaningful_requests, 7);
     assert.strictEqual(remaining, 13);
     assert.strictEqual(recomputeDerived(state).new_meaningful_requests, 7);
+  });
+
+  it("normalizes provider aliases and unresolved leaf placeholders before aggregation", () => {
+    let state = initialSoakState();
+    state = addRequestEntry(
+      state,
+      entry("alias", {
+        selectedCombo: "Open/FreeModels",
+        provider: "oc",
+        model: "big-pickle",
+        costClass: "unknown",
+      })
+    );
+    state = addRequestEntry(
+      state,
+      entry("placeholder", {
+        selectedCombo: "free",
+        provider: "openrouter",
+        model: "openrouter/:free",
+      })
+    );
+
+    assert.strictEqual(state.request_entries[0].provider, "opencode");
+    assert.strictEqual(state.request_entries[1].model, UNRESOLVED_LEAF_MODEL);
+    assert.strictEqual(
+      state.route_provider_model_distribution["Open/FreeModels/opencode/big-pickle"],
+      1
+    );
+    assert.strictEqual(
+      state.route_provider_model_distribution[`free/openrouter/${UNRESOLVED_LEAF_MODEL}`],
+      1
+    );
+
+    const evidence = generateEvidence(state);
+    assert.deepStrictEqual(evidence.f3_2_provider_distribution, { opencode: 1, openrouter: 1 });
+    assert.strictEqual(evidence.f3_2_model_distribution[UNRESOLVED_LEAF_MODEL], 1);
+  });
+
+  it("classifies cost from leaf evidence, not provider alias or combo display name", () => {
+    assert.strictEqual(
+      classifyObservableCostClass({ provider: "oc", model: "big-pickle", costUsd: 0 }),
+      "unknown"
+    );
+    assert.strictEqual(
+      classifyObservableCostClass({ provider: "oc", model: "nemotron-3-ultra-free", costUsd: 0 }),
+      "verified_free"
+    );
+    assert.strictEqual(
+      classifyObservableCostClass({
+        provider: "openrouter",
+        model: "openrouter/:free",
+        costUsd: 0,
+      }),
+      "unknown"
+    );
+    assert.strictEqual(
+      classifyObservableCostClass({ provider: "claude", model: "claude-sonnet-5", costUsd: 0 }),
+      "subscription_included"
+    );
+  });
+
+  it("keeps policy violation aggregate consistent with durable request classifications", () => {
+    let state = initialSoakState();
+    state = addRequestEntry(
+      state,
+      entry("policy", {
+        policy: "free_only",
+        costClass: "unknown",
+        success: false,
+        failureClass: "policy_violation",
+      })
+    );
+
+    assert.strictEqual(state.policy_violation_count, 1);
+    assert.strictEqual(generateEvidence(state).f3_2_policy_violations, 1);
+  });
+
+  it("preserves historical evidence with durable amendment audit trail", () => {
+    let state = initialSoakState();
+    state = addRequestEntry(
+      state,
+      entry("correct-me", {
+        provider: "oc",
+        model: "big-pickle",
+        costClass: "unknown",
+        success: false,
+        failureClass: "policy_violation",
+      })
+    );
+    state = amendRequestClassification(state, {
+      amendmentId: "amend-w1-big-pickle-policy",
+      windowId: "w1",
+      requestId: "correct-me",
+      reason: "W1 post-window audit: request was real but not a free_only policy success.",
+      corrected: { success: true, failureClass: undefined },
+    });
+
+    assert.strictEqual(state.request_entries[0].success, true);
+    assert.strictEqual(state.request_entries[0].failureClass, undefined);
+    assert.strictEqual(state.request_entries[0].provider, "opencode");
+    assert.strictEqual(state.policy_violation_count, 0);
+    assert.strictEqual(state.evidence_amendments?.[0].original.failureClass, "policy_violation");
+    assert.strictEqual(state.evidence_amendments?.[0].corrected.success, true);
+    assert.deepStrictEqual(generateEvidence(state).evidence_amendments, state.evidence_amendments);
+  });
+
+  it("documents 502 failover eligibility and pre-upstream 401 exclusion from W1 counting", () => {
+    let state = initialSoakState();
+    state = addRequestEntry(
+      state,
+      entry("502", {
+        reachedRealUpstream: false,
+        success: false,
+        failureClass: "server_error",
+        fallbackCount: 0,
+      })
+    );
+    state = addRequestEntry(
+      state,
+      entry("401", {
+        reachedRealUpstream: false,
+        success: false,
+        failureClass: "auth_failure",
+        fallbackCount: 0,
+      })
+    );
+
+    assert.strictEqual(state.new_meaningful_requests, 0);
+    assert.strictEqual(state.new_failures, 0);
+    assert.strictEqual(state.cost_class_distribution.unknown, undefined);
   });
 
   it("selects preflight routes from catalog data without real inference", () => {

@@ -1,7 +1,12 @@
 /**
  * F3.2 — Sanitized evidence generator. No secrets; no production mutation.
  */
-import { isMeaningfulRealRequest, SoakState } from "./soakState";
+import {
+  isMeaningfulRealRequest,
+  normalizeLeafModelId,
+  normalizeProviderId,
+  SoakState,
+} from "./soakState";
 
 export interface NonSoakProbeIncident {
   route: string;
@@ -82,6 +87,7 @@ export interface SoakEvidence {
   ut99_modified: boolean;
   cutover_performed: boolean;
   notes: string;
+  evidence_amendments: SoakState["evidence_amendments"];
 }
 
 function increment(map: Record<string, number>, key: string | undefined): void {
@@ -119,8 +125,8 @@ export function generateEvidence(
     increment(intentDistribution, entry.intent);
     increment(policyDistribution, entry.policy);
     increment(routeDistribution, entry.selectedCombo);
-    increment(providerDistribution, entry.provider);
-    increment(modelDistribution, entry.model);
+    increment(providerDistribution, normalizeProviderId(entry.provider));
+    increment(modelDistribution, normalizeLeafModelId(entry.model));
     increment(costClassDistribution, entry.costClass);
   }
 
@@ -167,5 +173,6 @@ export function generateEvidence(
     ut99_modified: false,
     cutover_performed: false,
     notes: state.notes,
+    evidence_amendments: state.evidence_amendments || [],
   };
 }

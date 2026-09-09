@@ -23,10 +23,15 @@ describe("O9-F3.2 privileged soak-state helper boundary", () => {
     );
   });
 
-  it("hardcodes the canonical state path and strict filename", () => {
+  it("hardcodes the canonical state/evidence paths and strict filenames", () => {
     assert.match(source, /const CANONICAL_DIR = "\/srv\/jarvis\/evidence";/);
     assert.match(source, /const CANONICAL_FILE = "o9-f3-2-soak-state\.json";/);
+    assert.match(source, /const CANONICAL_EVIDENCE_FILE = "o9-f3-2-window1-evidence\.json";/);
     assert.match(source, /const CANONICAL_PATH = join\(CANONICAL_DIR, CANONICAL_FILE\);/);
+    assert.match(
+      source,
+      /const CANONICAL_EVIDENCE_PATH = join\(CANONICAL_DIR, CANONICAL_EVIDENCE_FILE\);/
+    );
   });
 
   it("rejects path traversal and non-allowlisted filenames before IO", () => {
@@ -43,6 +48,18 @@ describe("O9-F3.2 privileged soak-state helper boundary", () => {
     const result = run(["replace", "o9-f3-2-soak-state.json"], "not json");
     assert.notStrictEqual(result.status, 0);
     assert.match(result.stderr, /F3_2_HELPER_INVALID_JSON/);
+  });
+
+  it("accepts evidence writes only through the dedicated atomic helper command", () => {
+    assert.match(source, /if \(command === "write-evidence"\)/);
+    assert.match(source, /function atomicWriteEvidence\(raw\)/);
+    assert.match(source, /renameSync\(tmpPath, path\)/);
+    assert.doesNotMatch(source, /install.+\/dev\/stdin/s);
+    assert.doesNotMatch(source, /execFileSync\("sudo", \["install"/);
+
+    const wrongName = run(["write-evidence", "o9-f3-2-window1-legacy.json"], "{}");
+    assert.notStrictEqual(wrongName.status, 0);
+    assert.match(wrongName.stderr, /F3_2_HELPER_BAD_FILENAME/);
   });
 
   it("rejects corrupted baseline schema on replace", () => {

@@ -24,6 +24,18 @@ export const F3_2_MAX_WINDOWS = 100;
 
 export type CostClass = "verified_free" | "subscription_included" | "paid" | "mixed" | "unknown";
 
+export const UNRESOLVED_LEAF_MODEL = "__unresolved_leaf__";
+
+export interface SoakEvidenceAmendment {
+  amendmentId: string;
+  createdAt: string;
+  windowId: string;
+  requestId: string;
+  reason: string;
+  original: Partial<SoakRequestEntry>;
+  corrected: Partial<SoakRequestEntry>;
+}
+
 export interface SoakRequestEntry {
   requestId: string;
   windowId: string;
@@ -116,6 +128,7 @@ export interface SoakState {
   readiness: string;
   cutover_approved: boolean;
   notes: string;
+  evidence_amendments?: SoakEvidenceAmendment[];
 }
 
 export const F3_2_BASELINE_MEANINGFUL = 20;
@@ -158,6 +171,7 @@ export function initialSoakState(): SoakState {
     cutover_approved: false,
     notes:
       "F3.2 reset to verified F3.1 baseline (20/20/0). Previous W1 was invalidated and preserved forensically because durable request/window evidence was absent. Window 1 execution pending.",
+    evidence_amendments: [],
   };
 }
 
@@ -178,16 +192,45 @@ function increment(map: Record<string, number>, key: string | undefined): void {
   map[k] = (map[k] || 0) + 1;
 }
 
+export function normalizeProviderId(provider: string | undefined | null): string | undefined {
+  const normalized = String(provider || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === "oc") return "opencode";
+  return normalized;
+}
+
+export function normalizeLeafModelId(model: string | undefined | null): string | undefined {
+  const raw = String(model || "").trim();
+  if (!raw) return undefined;
+  if (/^oc\/(?:\*?-?free|-free)$/i.test(raw)) return UNRESOLVED_LEAF_MODEL;
+  if (/^openrouter\/(?:\*?:free|:free)$/i.test(raw)) return UNRESOLVED_LEAF_MODEL;
+  if (/^[-:]?free$/i.test(raw)) return UNRESOLVED_LEAF_MODEL;
+  return raw;
+}
+
+export function normalizeSoakRequestEntry(entry: SoakRequestEntry): SoakRequestEntry {
+  return {
+    ...entry,
+    provider: normalizeProviderId(entry.provider),
+    model: normalizeLeafModelId(entry.model),
+  };
+}
+
 function routeKey(entry: SoakRequestEntry): string {
-  if (entry.selectedCombo && entry.provider && entry.model) {
-    return `${entry.selectedCombo}/${entry.provider}/${entry.model}`;
+  const provider = normalizeProviderId(entry.provider);
+  const model = normalizeLeafModelId(entry.model);
+  if (entry.selectedCombo && provider && model) {
+    return `${entry.selectedCombo}/${provider}/${model}`;
   }
-  if (entry.provider && entry.model) return `${entry.provider}/${entry.model}`;
+  if (provider && model) return `${provider}/${model}`;
   return entry.selectedCombo || "unknown";
 }
 
 export function recomputeDerived(state: SoakState): SoakState {
-  const meaningful = state.request_entries.filter(isMeaningfulRealRequest);
+  const normalizedEntries = state.request_entries.map(normalizeSoakRequestEntry);
+  const meaningful = normalizedEntries.filter(isMeaningfulRealRequest);
   const newSuccesses = meaningful.filter((e) => e.success).length;
   const newFailures = meaningful.filter((e) => !e.success).length;
   const newMeaningful = meaningful.length;
@@ -220,6 +263,7 @@ export function recomputeDerived(state: SoakState): SoakState {
     policy_coverage: Array.from(new Set(meaningful.map((e) => e.policy))),
     route_provider_model_distribution: routeDist,
     cost_class_distribution: costDist,
+    policy_violation_count: meaningful.filter((e) => e.failureClass === "policy_violation").length,
     new_meaningful_requests: newMeaningful,
     new_successes: newSuccesses,
     new_failures: newFailures,
@@ -236,7 +280,43 @@ export function recomputeDerived(state: SoakState): SoakState {
 export function addRequestEntry(state: SoakState, entry: SoakRequestEntry): SoakState {
   // Deduplicate by requestId — never double-count (also after resume).
   if (state.request_entries.some((e) => e.requestId === entry.requestId)) return state;
-  return recomputeDerived({ ...state, request_entries: [...state.request_entries, entry] });
+  return recomputeDerived({
+    ...state,
+    request_entries: [...state.request_entries, normalizeSoakRequestEntry(entry)],
+  });
+}
+
+export function amendRequestClassification(
+  state: SoakState,
+  amendment: Omit<SoakEvidenceAmendment, "createdAt" | "original">
+): SoakState {
+  const current = state.request_entries.find((entry) => entry.requestId === amendment.requestId);
+  if (!current) throw new Error(`F3_2_AMENDMENT_REQUEST_NOT_FOUND:${amendment.requestId}`);
+  const normalizedCorrected = normalizeSoakRequestEntry({
+    ...current,
+    ...amendment.corrected,
+  } as SoakRequestEntry);
+  const nextEntries = state.request_entries.map((entry) =>
+    entry.requestId === amendment.requestId ? normalizedCorrected : entry
+  );
+  const nextAmendment: SoakEvidenceAmendment = {
+    ...amendment,
+    createdAt: new Date().toISOString(),
+    original: {
+      provider: current.provider,
+      model: current.model,
+      costClass: current.costClass,
+      success: current.success,
+      failureClass: current.failureClass,
+      reachedRealUpstream: current.reachedRealUpstream,
+    },
+    corrected: amendment.corrected,
+  };
+  return recomputeDerived({
+    ...state,
+    request_entries: nextEntries,
+    evidence_amendments: [...(state.evidence_amendments || []), nextAmendment],
+  });
 }
 
 export function startWindowExecution(def: ActiveSoakWindow): ActiveSoakWindow {
