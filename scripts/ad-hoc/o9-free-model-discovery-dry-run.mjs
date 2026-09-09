@@ -4,25 +4,28 @@ import { getOpenRouterCatalog } from "../../src/lib/catalog/openrouterCatalog.ts
 import { normalizeOpenRouterFreeCatalog } from "../../src/lib/catalog/openrouterFreeDiscovery.ts";
 import { diffOpenRouterFreeCatalog } from "../../src/lib/catalog/openrouterFreeDiff.ts";
 import {
+  auditOpenFreeModelsCombo,
+  buildFreeCatalogShortlist,
+  normalizeShadowInventory,
+} from "../../src/lib/catalog/freeCatalogShortlist.ts";
+import {
   buildFreeModelCompatibilityProfile,
   evaluateFreeRouteEligibility,
 } from "../../open-sse/services/autoCombo/freeModelEligibility.ts";
 import { rankFreeModels } from "../../open-sse/services/autoCombo/freeModelScoring.ts";
 import { buildBenchmarkDryRunPlan } from "../../open-sse/services/autoCombo/freeModelBenchmark.ts";
-import { auditFreeCombo } from "../../open-sse/services/autoCombo/freeComboAudit.ts";
-import { getCombos } from "../../src/lib/db/combos.ts";
 
 function sanitizeLimit(items, limit = 50) {
   return items.slice(0, limit);
 }
 
-async function readOmniRouteCatalogFromShadow() {
+async function fetchShadowJson(path) {
   const baseUrl = process.env.O9_SHADOW_BASE_URL || "http://127.0.0.1:20131";
   const apiKey = process.env.O9_SHADOW_API_KEY || process.env.OMNIROUTE_API_KEY || "";
   if (!apiKey) {
     return { ok: false, reason: "missing_api_key", data: [] };
   }
-  const res = await fetch(`${baseUrl}/v1/models`, {
+  const res = await fetch(`${baseUrl}${path}`, {
     headers: { Authorization: `Bearer ${apiKey}` },
     signal: AbortSignal.timeout(10_000),
   });
@@ -31,10 +34,21 @@ async function readOmniRouteCatalogFromShadow() {
   return { ok: true, reason: null, data: Array.isArray(body.data) ? body.data : [] };
 }
 
+async function readOmniRouteCatalogFromShadow() {
+  return fetchShadowJson("/v1/models");
+}
+
+async function readCombosFromShadow() {
+  return fetchShadowJson("/v1/combos");
+}
+
 const catalog = await getOpenRouterCatalog();
 const normalized = normalizeOpenRouterFreeCatalog(catalog.data, new Date());
 const omniRoute = await readOmniRouteCatalogFromShadow();
+const combos = await readCombosFromShadow();
 const diff = diffOpenRouterFreeCatalog(normalized.models, omniRoute.data);
+const shadowInventory = normalizeShadowInventory(omniRoute.data, combos.data);
+const shortlist = buildFreeCatalogShortlist(normalized.verifiedFree, shadowInventory, 12);
 const profiles = normalized.verifiedFree.map((model) => buildFreeModelCompatibilityProfile(model));
 const claudeCodeFast = profiles.map((profile) =>
   evaluateFreeRouteEligibility(profile, "free/claude-code-fast")
@@ -42,15 +56,11 @@ const claudeCodeFast = profiles.map((profile) =>
 const scores = rankFreeModels(
   profiles.map((profile) => ({ profile, routeClass: "free/claude-code-fast" }))
 );
-let combos = [];
-try {
-  combos = await getCombos();
-} catch {
-  combos = [];
-}
-const freeCombo = combos.find((combo) => combo?.name === "Open/FreeModels");
-const freeComboAudit = freeCombo ? auditFreeCombo(freeCombo, normalized.models, profiles) : null;
-const benchmarkDryRun = buildBenchmarkDryRunPlan(profiles);
+const freeCombo = combos.data.find((combo) => combo?.name === "Open/FreeModels");
+const freeComboAudit = freeCombo
+  ? auditOpenFreeModelsCombo(freeCombo, normalized.models, profiles)
+  : null;
+const benchmarkDryRun = shortlist.benchmarkPlan;
 
 const report = {
   mode: "dry_run",
@@ -71,6 +81,10 @@ const report = {
     ok: omniRoute.ok,
     reason: omniRoute.reason,
     modelCount: omniRoute.data.length,
+    normalizedOpenRouterModelCount: shadowInventory.modelCount,
+    combosOk: combos.ok,
+    combosReason: combos.reason,
+    comboCount: combos.data.length,
   },
   diff: {
     presentCount: diff.present.length,
@@ -85,6 +99,10 @@ const report = {
     malformedEntries: [],
   },
   top10BestLookingByMetadata: scores.slice(0, 10),
+  shortlist: {
+    provisionalCandidates: shortlist.provisionalCandidates,
+    rejectedCandidates: sanitizeLimit(shortlist.rejectedCandidates, 100),
+  },
   rejectedFromClaudeCodeFast: sanitizeLimit(
     claudeCodeFast
       .filter((entry) => !entry.eligible)
