@@ -3,9 +3,9 @@
 // model-type inference, and the free-model / display-name heuristics that shape
 // OpenRouter entries in `getUnifiedModelsResponse`.
 
-export function qualifyOpenRouterModelId(modelId: string): string {
-  return modelId.startsWith("openrouter/") ? modelId : `openrouter/${modelId}`;
-}
+import { isVerifiedZeroPrice } from "@/lib/catalog/openrouterFreeDiscovery";
+
+export { qualifyOpenRouterModelId } from "@/lib/catalog/openrouterFreeDiscovery";
 
 export function normalizeOpenRouterModalities(value: unknown): string[] {
   return Array.isArray(value)
@@ -30,10 +30,9 @@ export function isZeroPrice(value: unknown) {
 
 export function isOpenRouterFreeModel(model: {
   id?: string;
-  pricing?: { prompt?: string; completion?: string };
+  pricing?: { prompt?: string | number | null; completion?: string | number | null } | null;
 }) {
-  if (typeof model.id === "string" && model.id.endsWith(":free")) return true;
-  return isZeroPrice(model.pricing?.prompt) && isZeroPrice(model.pricing?.completion);
+  return isVerifiedZeroPrice(model.pricing);
 }
 
 export function getOpenRouterDisplayName(model: {
