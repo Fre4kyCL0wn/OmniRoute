@@ -64,6 +64,7 @@ How the system is put together — read these to understand the runtime, code la
 - [CODEBASE_DOCUMENTATION.md](architecture/CODEBASE_DOCUMENTATION.md) — engineering reference for the codebase.
 - [REPOSITORY_MAP.md](architecture/REPOSITORY_MAP.md) — directory-by-directory navigation guide.
 - [AUTHZ_GUIDE.md](architecture/AUTHZ_GUIDE.md) — authorization pipeline (route classifier + policy engine).
+- [PROVIDER_RUNTIME_STATE.md](architecture/PROVIDER_RUNTIME_STATE.md) — O9-F3.3P0 provider state foundation, free candidate filtering, phase status & roadmap.
 - [RESILIENCE_GUIDE.md](architecture/RESILIENCE_GUIDE.md) — provider circuit breaker, connection cooldown, and model lockout.
 - [QUALITY_GATES.md](architecture/QUALITY_GATES.md) — quality-gate scripts and CI jobs inventory.
 - [MONITORING_SECTIONS.md](architecture/MONITORING_SECTIONS.md) — monitoring/costs dashboard navigation.

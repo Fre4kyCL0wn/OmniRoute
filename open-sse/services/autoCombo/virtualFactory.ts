@@ -49,6 +49,11 @@ import { resolveProviderAlias } from "../model.ts";
 import { filterExcludedCandidates } from "./candidateOverrides";
 import { getExcludedConnectionIds } from "@/lib/db/autoCandidateOverrides";
 import {
+  filterFreeCandidatesByRuntimeState,
+  getProviderRuntimeState,
+  type ProviderRuntimeState,
+} from "../providerRuntimeState";
+import {
   filterResilienceBlockedCandidates,
   buildConnectionResilienceMap,
   SYNTHETIC_NOAUTH_CONNECTION_ID as RESILIENCE_NOAUTH_CONNECTION_ID,
@@ -1003,6 +1008,31 @@ export async function createVirtualAutoComboFromPrepared(
       );
       effectivePool = [];
     }
+  }
+
+  if (spec?.tier === "free" && effectivePool.length > 0) {
+    const stateRequests = new Map<string, Promise<ProviderRuntimeState>>();
+    for (const candidate of effectivePool) {
+      const connectionIds = [
+        ...(candidate.allowedConnectionIds ?? []),
+        ...(candidate.connectionId && candidate.connectionId !== RESILIENCE_NOAUTH_CONNECTION_ID
+          ? [candidate.connectionId]
+          : []),
+      ];
+      for (const connectionId of connectionIds) {
+        const key = `${candidate.provider}:${connectionId}`;
+        if (!stateRequests.has(key)) {
+          stateRequests.set(
+            key,
+            getProviderRuntimeState(candidate.provider, connectionId, candidate.model)
+          );
+        }
+      }
+    }
+    effectivePool = filterFreeCandidatesByRuntimeState(
+      effectivePool,
+      await Promise.all(stateRequests.values())
+    );
   }
 
   // Subscription-first routing (`auto/subscription`, `auto/thrifty`). Applied

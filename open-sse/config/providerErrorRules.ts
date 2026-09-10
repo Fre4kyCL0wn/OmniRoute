@@ -32,7 +32,7 @@ export type ProviderErrorRuleMatch = {
   /**
    * Intended lock scope. #10334: for a BUILT-IN catalog rule, this field is
    * CONSUMED end-to-end only for providers in `HONORS_RULE_LOCK_SCOPE_PROVIDERS`
-   * (agentrouter-exclusive today, gated by `honorsRuleLockScope()`) — for those,
+   * (gated by `honorsRuleLockScope()`) — for those,
    * `checkFallbackError` surfaces it as `ruleScope` on its return value for the
    * persistence layer to honor instead of re-deriving scope from
    * `hasPerModelQuota()`. For every other built-in-rule provider it remains
@@ -210,7 +210,11 @@ function buildCloudflareAiRules(): ProviderErrorRule[] {
 }
 
 // ─── OpenRouter ─────────────────────────────────────────────────────────────
-// #6842: OpenRouter returns 402 for both a negative account balance and a
+// OpenRouter's `free-models-per-day` 429 is a daily allowance shared by every
+// free model on one account. It must cool that connection, not create one
+// lockout per model; sibling OpenRouter accounts remain independent.
+//
+// #6842: OpenRouter also returns 402 for both a negative account balance and a
 // depleted per-key credit cap. The global `status_402` rule already maps this
 // to `quota_exhausted` with a zero cooldown (immediate fallback to the next
 // connection), but leaves the scope ambiguous and doesn't stop the SAME
@@ -220,6 +224,15 @@ function buildCloudflareAiRules(): ProviderErrorRule[] {
 // cooldown so combo routing skips it instead of hot-looping back onto it.
 function buildOpenrouterRules(): ProviderErrorRule[] {
   return [
+    {
+      id: "openrouter-free-models-per-day",
+      match: ({ status, body }) => {
+        if (status !== 429) return null;
+        const text = JSON.stringify(body ?? "");
+        if (!/free-models-per-day/i.test(text)) return null;
+        return { reason: "quota_exhausted", scope: "connection", cooldownMs: 60 * 60 * 1000 };
+      },
+    },
     {
       id: "openrouter-credit-exhausted-402",
       match: ({ status }) => {
@@ -309,8 +322,7 @@ export const providerRuleRegistry = new Map<string, ProviderErrorRule[]>([
 /**
  * Providers whose ProviderErrorRuleMatch.scope is actually CONSUMED at the
  * persistence layer (markAccountUnavailable / combo target exhaustion) to pick
- * connection-vs-model lock scope. EXCLUSIVE allowlist by owner decision
- * (2026-08-14, issue #10334) — deliberately SEPARATE from
+ * connection-vs-model lock scope. EXCLUSIVE allowlist — deliberately SEPARATE from
  * FULL_TEXT_RULE_PROVIDERS: that set controls what body a rule matches against
  * (input), this one controls whether the matched scope changes caller behavior
  * (output). A provider could need one without the other.
@@ -323,7 +335,7 @@ export const providerRuleRegistry = new Map<string, ProviderErrorRule[]>([
  * mechanism (#11104) silently inert for every provider except the ones listed
  * below. See `hasOperatorRuleForProvider`.
  */
-const HONORS_RULE_LOCK_SCOPE_PROVIDERS = new Set(["agentrouter"]);
+const HONORS_RULE_LOCK_SCOPE_PROVIDERS = new Set(["agentrouter", "openrouter"]);
 
 export function honorsRuleLockScope(provider: string | null | undefined): boolean {
   if (!provider) return false;
@@ -367,8 +379,8 @@ export function egressBucketedLockProviders(): string[] {
  * error ({code, type} — message stripped by the combo callers), which is
  * enough for header/status/code rules but blind to body-text markers like
  * agentrouter's "额度不足". Providers in this set get the raw error text as
- * the match body instead. EXCLUSIVE allowlist by owner decision (2026-08-13):
- * adding a provider here is an explicit opt-in — the default path for every
+ * the match body instead. EXCLUSIVE allowlist: adding a provider here is an
+ * explicit opt-in — the default path for every
  * other provider must remain byte-for-byte unchanged.
  *
  * Operator-declared rules bypass this allowlist entirely (see
@@ -376,7 +388,7 @@ export function egressBucketedLockProviders(): string[] {
  * of the error body by construction, so a rule that never sees body text could
  * never match anything, defeating the point of declaring it.
  */
-const FULL_TEXT_RULE_PROVIDERS = new Set(["agentrouter"]);
+const FULL_TEXT_RULE_PROVIDERS = new Set(["agentrouter", "openrouter"]);
 
 /**
  * True when an operator has declared at least one rule for this provider via

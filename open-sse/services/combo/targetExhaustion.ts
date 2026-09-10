@@ -27,10 +27,9 @@ import {
 import { RateLimitReason } from "../../config/constants.ts";
 import { isProviderCircuitOpenResult, isRequestScopedUpstreamFailure } from "./comboPredicates.ts";
 import { isCloudflareFingerprintRejection } from "../errorClassifier.ts";
-// #10334 — agentrouter-exclusive predicate shared with the persistence layer
-// (markAccountUnavailable) so the same-request combo skip and the persisted
-// connection cooldown agree on exactly which fallbackResult shapes qualify.
-import { isAgentrouterConnectionQuotaScope } from "@/sse/services/auth";
+// Shared with markAccountUnavailable so same-request combo skipping and the
+// persisted connection cooldown agree on which fallbackResult shapes qualify.
+import { isConnectionQuotaScope } from "@/sse/services/auth";
 import type { ComboLogger, ResolvedComboTarget } from "./types.ts";
 
 // Connection-level failure statuses: the provider connection itself is likely bad (upstream
@@ -84,9 +83,8 @@ export type ComboExhaustionSets = {
 export type ApplyComboTargetExhaustionOptions = {
   result: { status: number; headers?: Headers | null };
   fallbackResult: Parameters<typeof isProviderExhaustedReason>[0] & {
-    /** #10334 — agentrouter-exclusive; see isAgentrouterConnectionQuotaScope
-     * (src/sse/services/auth.ts). Populated only for providers in
-     * HONORS_RULE_LOCK_SCOPE_PROVIDERS (today: agentrouter only). */
+    /** See isConnectionQuotaScope (src/sse/services/auth.ts). Populated only
+     * for providers in HONORS_RULE_LOCK_SCOPE_PROVIDERS. */
     ruleScope?: "model" | "provider" | "connection";
     permanent?: boolean;
   };
@@ -115,9 +113,9 @@ export function applyComboTargetExhaustion(
   const { result, sets, log, tag, errorText, structuredError } = opts;
   const provider = target.provider;
 
-  // #10334: agentrouter-exclusive account-wide quota exhaustion ("额度不足")
-  // must skip remaining SAME-CONNECTION targets within THIS request too, not
-  // just via the persisted cooldown markAccountUnavailable applies for
+  // Connection-scoped account quota exhaustion must skip remaining
+  // SAME-CONNECTION targets within THIS request too, not just via the persisted
+  // cooldown markAccountUnavailable applies for
   // whichever leg runs next. agentrouter is a passthroughModels provider
   // (hasPerModelQuota() === true), so without this branch the classification
   // below would fall straight through isProviderQuotaExhausted's
@@ -125,27 +123,14 @@ export function applyComboTargetExhaustion(
   // markConnectionLevelExhaustion's connection-level guard (429 is not in
   // CONNECTION_LEVEL_ERROR_STATUSES), marking nothing: combo would keep
   // burning one upstream call per remaining model of the same exhausted
-  // account. isAgentrouterConnectionQuotaScope is the same guard
-  // markAccountUnavailable uses, so both consumers agree on exactly which
+  // account. isConnectionQuotaScope is the same guard markAccountUnavailable
+  // uses, so both consumers agree on exactly which
   // fallbackResult shapes qualify (never a permanent/credits-exhausted
   // result, even one carrying ruleScope "connection").
   //
-  // Runs BEFORE the auth-level (401/403) branch below. This is deliberate,
-  // not incidental: the "额度不足" rule matches statuses {400, 403, 429}
-  // (buildAgentrouterRules, providerErrorRules.ts), and Task 1's FORBIDDEN
-  // pre-check (accountFallback.ts ~1729-1751) surfaces `ruleScope:
-  // "connection"` for a RAW 403 carrying that body too — so this branch can
-  // also fire on a 403, not just the restated 429. That is safe: for a 403
-  // this branch and markAuthLevelExhaustion below write the SAME set with
-  // the SAME `${provider}:${connId}` key and both return `true` — they are
-  // set-equivalent for agentrouter on that status. The Cloudflare-1010 and
-  // Alibaba free-tier EXEMPTIONS further down in the 401/403 branch cannot
-  // apply here regardless of ordering: 1010 is a CDN fingerprint rejection
-  // agentrouter's own text never carries, and the Alibaba exemption is
-  // gated on isAlibabaModelStudioProvider(provider), which agentrouter is
-  // not.
-  //
-  // Unlike the connection-level/auth-level branches, this path deliberately
+  // Runs before auth-level handling because an allowlisted provider rule can
+  // classify a raw 403 quota response as connection-scoped. Unlike the
+  // connection-level/auth-level branches, this path deliberately
   // does NOT fall through to markTransientOrConnectionLevel, so
   // sets.transientRateLimitedProviders is NEVER populated for this failure.
   // That is required, not just incidental: combo.ts (both dispatchers, see
@@ -160,8 +145,8 @@ export function applyComboTargetExhaustion(
   // force-allowed for a later leg on the same provider — a remaining leg
   // can now resolve to "no credentials available" instead of retrying a
   // rate-limited sibling account, which is the intended, safer outcome.
-  if (isAgentrouterConnectionQuotaScope(provider, opts.fallbackResult)) {
-    markAgentrouterConnectionQuotaExhaustion(target, { sets, log, tag });
+  if (isConnectionQuotaScope(provider, opts.fallbackResult)) {
+    markConnectionQuotaExhaustion(target, { sets, log, tag });
     return true;
   }
 
@@ -341,13 +326,10 @@ function markAuthLevelExhaustion(
 }
 
 /**
- * #10334: agentrouter-exclusive connection-scope account quota exhaustion. Mirrors
- * markAuthLevelExhaustion's connectionId-present/absent split — when the target carries a
- * connectionId, only that connection's account is exhausted (sibling agentrouter connections
- * for the same user may still have quota); fall back to whole-provider exhaustion only when no
- * connectionId is available.
+ * Connection-scope account quota exhaustion. Mirrors markAuthLevelExhaustion's
+ * connectionId-present/absent split so sibling accounts remain independently eligible.
  */
-function markAgentrouterConnectionQuotaExhaustion(
+function markConnectionQuotaExhaustion(
   target: ResolvedComboTarget,
   opts: Pick<ApplyComboTargetExhaustionOptions, "sets" | "log" | "tag">
 ): void {
