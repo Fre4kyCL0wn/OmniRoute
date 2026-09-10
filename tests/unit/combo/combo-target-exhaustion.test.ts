@@ -699,3 +699,167 @@ test("401 carrying a real fingerprint signal still marks auth-level (exemption i
   assert.equal(exhausted, true, "a 401 with a fingerprint-looking body must still mark auth-level");
   assert.ok(s.exhaustedConnections.has("test-dedup-provider:conn-1"));
 });
+
+// ── O9-F3.3P0: connection-scoped account-quota exhaustion (isConnectionQuotaScope) ──
+// A provider rule can classify a 429 as an ACCOUNT-wide renewing quota that is
+// nonetheless CONNECTION-scoped for lock purposes (OpenRouter free-models-per-day,
+// #10334 / honorsRuleLockScope allowlist). failureKind (quota) and lock scope
+// (connection) are separate dimensions: an exhausted account behind connection A
+// must not skip a healthy sibling connection B in the same request.
+const FREE_MODELS_PER_DAY_BODY =
+  "Rate limit exceeded: free-models-per-day. " +
+  "Add 10 credits to unlock 1000 free model requests per day";
+
+test("A) OpenRouter connection-scoped quota WITH connectionId marks only that connection", () => {
+  const s = sets();
+  const exhausted = applyComboTargetExhaustion(
+    target({ provider: "openrouter", connectionId: "conn-A" }),
+    {
+      ...baseOpts,
+      result: { status: 429 },
+      fallbackResult: { ruleScope: "connection", reason: "quota_exhausted" },
+      errorText: FREE_MODELS_PER_DAY_BODY,
+      sets: s,
+    }
+  );
+  assert.equal(exhausted, true);
+  assert.ok(
+    s.exhaustedConnections.has("openrouter:conn-A"),
+    "the exhausted account's connection is marked"
+  );
+  assert.equal(s.exhaustedProviders.size, 0, "NEVER a whole-provider lockout for an account quota");
+  assert.equal(
+    s.transientRateLimitedProviders.size,
+    0,
+    "this path must not populate transientRateLimitedProviders (would re-open the account)"
+  );
+});
+
+test("A) sibling OpenRouter connection B stays eligible after connection A's account quota", () => {
+  const s = sets();
+  applyComboTargetExhaustion(target({ provider: "openrouter", connectionId: "conn-A" }), {
+    ...baseOpts,
+    result: { status: 429 },
+    fallbackResult: { ruleScope: "connection", reason: "quota_exhausted" },
+    errorText: FREE_MODELS_PER_DAY_BODY,
+    sets: s,
+  });
+  // getExhaustedTargetSkipReason-style checks for a sibling target on conn-B.
+  assert.equal(s.exhaustedProviders.has("openrouter"), false);
+  assert.equal(
+    s.exhaustedConnections.has("openrouter:conn-B"),
+    false,
+    "connection B was never marked — combo routing must still consider it"
+  );
+});
+
+test("B) connection-scoped quota WITHOUT a connectionId does NOT escalate to a provider lockout", () => {
+  const s = sets();
+  const exhausted = applyComboTargetExhaustion(
+    target({ provider: "openrouter", connectionId: null }),
+    {
+      ...baseOpts,
+      result: { status: 429 },
+      fallbackResult: { ruleScope: "connection", reason: "quota_exhausted" },
+      errorText: FREE_MODELS_PER_DAY_BODY,
+      sets: s,
+    }
+  );
+  // The failing account is unknown — a missing connectionId is not proof that
+  // every OpenRouter account shares one budget. Unknown stays unknown.
+  assert.equal(
+    s.exhaustedProviders.has("openrouter"),
+    false,
+    "no optimistic scope escalation: an unscoped account quota must not lock the whole provider"
+  );
+  assert.equal(s.exhaustedConnections.size, 0, "nothing to scope to — mark nothing request-scoped");
+  assert.equal(s.transientRateLimitedProviders.size, 0);
+  assert.equal(
+    exhausted,
+    true,
+    "still suppresses the pointless same-model retry on the just-quota-limited leg"
+  );
+});
+
+test("B-legacy) AgentRouter WITHOUT a connectionId still escalates to whole-provider (#10334 legacy, retained)", () => {
+  // Side-by-side with case B: agentrouter is the sole member of
+  // LEGACY_NO_CONNECTION_ID_PROVIDER_LOCKOUT_PROVIDERS (targetExhaustion.ts), so
+  // it keeps the shipped #10334/#10419 "mirror markAuthLevelExhaustion" fallback.
+  // The O9-F3.3P0 fail-closed default (case B, openrouter) is NOT applied
+  // retroactively to agentrouter. Also pinned by
+  // tests/unit/agentrouter-lock-scope-10334.test.ts.
+  const s = sets();
+  const exhausted = applyComboTargetExhaustion(
+    target({ provider: "agentrouter", connectionId: null }),
+    {
+      ...baseOpts,
+      result: { status: 429 },
+      fallbackResult: { ruleScope: "connection", reason: "quota_exhausted" },
+      errorText: '{"error":{"message":"账户额度不足，请充值后重试"}}',
+      sets: s,
+    }
+  );
+  assert.equal(exhausted, true);
+  assert.ok(
+    s.exhaustedProviders.has("agentrouter"),
+    "legacy #10334: no connectionId → whole-provider fallback for agentrouter"
+  );
+  assert.equal(s.exhaustedConnections.size, 0);
+});
+
+test("C) legacy provider-wide quota on a non-passthrough provider still escalates (#1731 regression guard)", () => {
+  const s = sets();
+  const exhausted = applyComboTargetExhaustion(
+    target({ provider: "test-dedup-provider", connectionId: "conn-1" }),
+    {
+      ...baseOpts,
+      result: { status: 429 },
+      fallbackResult: { creditsExhausted: true },
+      sets: s,
+    }
+  );
+  assert.equal(exhausted, true);
+  assert.ok(
+    s.exhaustedProviders.has("test-dedup-provider"),
+    "the OpenRouter connection-scoped rule must not change #1731 for other providers"
+  );
+});
+
+test("D) transient OpenRouter 429 (no rule scope) stays transient — not an account-quota exhaustion", () => {
+  const s = sets();
+  const exhausted = applyComboTargetExhaustion(
+    target({ provider: "openrouter", connectionId: "conn-A" }),
+    {
+      ...baseOpts,
+      result: { status: 429 },
+      fallbackResult: {},
+      errorText: "Rate limit exceeded. Please retry shortly.",
+      sets: s,
+    }
+  );
+  assert.equal(exhausted, false);
+  assert.ok(s.transientRateLimitedProviders.has("openrouter"));
+  assert.equal(s.exhaustedProviders.size, 0);
+  assert.equal(s.exhaustedConnections.size, 0);
+});
+
+test("E) a model-scoped rule scope does NOT trigger the connection/provider cascade", () => {
+  const s = sets();
+  const exhausted = applyComboTargetExhaustion(
+    target({ provider: "openrouter", connectionId: "conn-A" }),
+    {
+      ...baseOpts,
+      result: { status: 429 },
+      fallbackResult: { ruleScope: "model", reason: "quota_exhausted" },
+      errorText: "quota exhausted for one model",
+      sets: s,
+    }
+  );
+  assert.equal(exhausted, false);
+  assert.equal(
+    s.exhaustedConnections.has("openrouter:conn-A"),
+    false,
+    "a model-scoped quota must not cool the whole connection"
+  );
+  assert.equal(s.exhaustedProviders.size, 0, "and must not cool the whole provider");
+});

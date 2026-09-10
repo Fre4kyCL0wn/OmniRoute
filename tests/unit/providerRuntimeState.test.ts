@@ -337,6 +337,70 @@ describe("Provider Runtime State", () => {
     });
   });
 
+  describe("Tests 7-8b: pure filter — no spurious suppression", () => {
+    function runtimeState(
+      overrides: Record<string, unknown>
+    ): import("../../open-sse/services/providerRuntimeState.ts").ProviderRuntimeState {
+      return {
+        providerId: "openrouter",
+        connectionId: "conn-A",
+        providerHealth: "healthy",
+        accountState: "available",
+        quotaState: "available",
+        quotaScope: "unknown",
+        cooldownUntil: null,
+        quotaResetAt: null,
+        costClass: "free_tier",
+        capabilities: {
+          executable: null,
+          fastEligible: null,
+          codingEligible: null,
+          genericToolEligible: null,
+          claudeCodeEligible: null,
+          supervisorEligible: null,
+        },
+        lastSuccessAt: null,
+        lastFailureAt: null,
+        failureReason: null,
+        latency: { medianMs: null, p95Ms: null },
+        computedAtMs: Date.now(),
+        ...overrides,
+      } as import("../../open-sse/services/providerRuntimeState.ts").ProviderRuntimeState;
+    }
+
+    it("passes a connection-less free candidate through untouched (no identity to prove exhausted)", async () => {
+      const { filterFreeCandidatesByRuntimeState } =
+        await import("../../open-sse/services/providerRuntimeState.ts");
+      // A free candidate with neither connectionId nor allowedConnectionIds
+      // (e.g. a keyless/noauth provider whose sentinel connection id is excluded
+      // upstream): the filter has nothing to match it against, so it must be
+      // kept verbatim, not dropped.
+      const candidates = [
+        { provider: "opencode", connectionId: null, model: "some/free-model" },
+        { provider: "openrouter", connectionId: "conn-A", model: "x/y:free" },
+      ];
+      const exhaustedA = runtimeState({
+        accountState: "quota_exhausted",
+        quotaState: "quota_exhausted",
+        quotaScope: "provider_account",
+        failureReason: "free-models-per-day",
+      });
+
+      const filtered = filterFreeCandidatesByRuntimeState(candidates, [exhaustedA]);
+      assert.deepEqual(filtered, [
+        { provider: "opencode", connectionId: null, model: "some/free-model" },
+      ]);
+    });
+
+    it("returns the SAME array reference when nothing is provider-account exhausted (pure, no-op)", async () => {
+      const { filterFreeCandidatesByRuntimeState } =
+        await import("../../open-sse/services/providerRuntimeState.ts");
+      const candidates = [{ provider: "openrouter", connectionId: "conn-A", model: "x/y:free" }];
+      const filtered = filterFreeCandidatesByRuntimeState(candidates, [runtimeState({})]);
+      assert.equal(filtered, candidates, "no exhaustion → original array returned unchanged");
+    });
+  });
+
   describe("Test 9: CostClass unknown stays fail-closed", () => {
     it("should return unknown costClass for uncurated providers", async () => {
       const { getProviderRuntimeState } =

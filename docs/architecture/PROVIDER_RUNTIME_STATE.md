@@ -3,11 +3,67 @@
 ## Phase Status
 
 - **O9-F3.3C — Free benchmark work**: **COMPLETE / COMMITTED / PUSHED** — checkpoint `8701227e8123103b98c8552e019494cb27f6aebb`
-- **O9-F3.3P0 — Provider State Foundation**: **IN PROGRESS**
+- **O9-F3.3P0 — Provider State Foundation**: **COMPLETE / VALIDATED**
 
 O9-F3.3P0 builds the foundation for a future direct, independent free / free-tier
 provider pool. Planned later: Groq, Cerebras, Gemini / Google AI Studio, NVIDIA NIM.
 Already present today: OpenRouter, OpenCode. **No provider live-integration happens in P0.**
+
+### O9-F3.3P0 — final state
+
+- Provider Runtime State aggregates the existing OmniRoute / O9 subsystems. No parallel
+  resilience system.
+- `providerHealth` and account / quota state are **separate**.
+- `quotaScope` (quota dimension) and execution / lock scope are **separate dimensions**.
+- `verified_free != executable`
+- `executable != genericToolEligible`
+- `genericToolEligible != claudeCodeEligible`
+- `claudeCodeEligible != supervisorEligible`
+- `unknown` / `null` stays `unknown` / `null`.
+- Unknown cost is **fail-closed**.
+
+**OpenRouter — `free-models-per-day`:**
+
+- `failureKind = quota_exhausted`, `quotaScope = provider_account`.
+- **With a known connection**: only that connection is marked request-scoped exhausted
+  (`exhaustedConnections`).
+- **Without a known connection**: no provider scope is invented — the request-scoped sets are
+  left untouched, the same-model retry is stopped, and failover continues. A healthy sibling
+  connection stays eligible.
+
+**AgentRouter — legacy compatibility (#10334 / #10419) retained:**
+
+- A connection-scoped account quota with **no connectionId** keeps the historical
+  whole-provider request lockout.
+- This is an **explicit legacy exception** (`LEGACY_NO_CONNECTION_ID_PROVIDER_LOCKOUT_PROVIDERS`
+  in `targetExhaustion.ts`), **not** the default for new providers. Removing or changing it is
+  its own initiative, not part of O9-F3.3P0.
+
+**Candidate filtering:**
+
+- Free candidate scoped to only connection A, A exhausted → removed.
+- Free candidate `allowedConnectionIds = [A, B]`, A exhausted → trimmed to `[B]`.
+- B healthy → stays.
+- No N per-model lockouts. No global OpenRouter lockout.
+
+**Validation:**
+
+- 12 / 12 P0 validation targets met.
+- Focused DB-free relevant tests: **154 / 154 PASS**.
+- `combo-target-exhaustion`: **51 / 51 PASS**.
+- AgentRouter DB-free relevant tests: **12 / 12 PASS**.
+- `typecheck:core`: PASS. `lint`: PASS. `git diff --check`: PASS.
+
+**Known test-infrastructure gap (pre-existing, not caused by F3.3P0):**
+
+- 9 AgentRouter / DB-dependent tests cannot run in this environment — no working SQLite
+  driver (`better-sqlite3` not built; `node:sqlite` unavailable). All failures are
+  `[DB] driver unavailable`, zero assertion failures. No DB code was touched by F3.3P0.
+- No separate full factory-E2E regression proof for the non-free path exists in this
+  environment for the same DB-infrastructure reason. Production behavior is structurally
+  protected by the `spec?.tier === "free"` guard placed **before** the free-candidate
+  runtime-state filter (`virtualFactory.ts`). No helper / production abstraction was
+  introduced solely for testability.
 
 ## Purpose
 
@@ -82,16 +138,31 @@ upstream-account identifier exists.
 ## targetExhaustion
 
 `open-sse/services/combo/targetExhaustion.ts` treats provider-account exhaustion in the new
-O9 context as **connection-scoped** when only one concrete connection is safely known to be
+O9 context as **connection-scoped** when one concrete connection is safely known to be
 exhausted. SAFE-CONNECTION targets of the same request are not accidentally blocked. An
 exhausted OpenRouter Connection A does **not** auto-lock Connection B. Existing
 quota/account exhaustion semantics are reused — no parallel lockout system.
 
+`markConnectionQuotaExhaustion()` (reached via `isConnectionQuotaScope()`):
+
+- **connectionId present** → `exhaustedConnections.add(`${provider}:${connId}`)`, return `true`.
+  Same for every provider.
+- **connectionId absent, provider in `LEGACY_NO_CONNECTION_ID_PROVIDER_LOCKOUT_PROVIDERS`**
+  (today: `agentrouter` only) → `exhaustedProviders.add(provider)`, return `true`. Legacy
+  #10334 / #10419 "mirror `markAuthLevelExhaustion`" fallback, pinned by an explicit test.
+- **connectionId absent, any other provider (default)** → nothing request-scoped is marked,
+  return `true`. The same-model retry is suppressed; the persisted per-connection cooldown
+  (`markAccountUnavailable`, rule scope `"connection"`) still cools whichever connection the
+  failing leg resolved.
+
+Model-scoped quota and transient 429 paths are unchanged. Legacy provider-wide quota paths
+outside this connection-scoped special case are unchanged (#1731 regression-guarded).
+
 ## Provider Roadmap
 
-- **P0**: Provider State Foundation
-- **P1**: Groq + Cerebras direct — **NOT APPROVED YET**
-- **P2**: Gemini + NVIDIA direct
+- **F3.3P0**: Provider State Foundation — **COMPLETE**
+- **F3.3P1**: Groq + Cerebras direct — **NOT STARTED / NOT YET AUTHORIZED FOR THIS RUN**
+- **F3.3P2**: Gemini + NVIDIA direct — **NOT STARTED**
 - **After**: Credential Broker
 
 Long-term target image:

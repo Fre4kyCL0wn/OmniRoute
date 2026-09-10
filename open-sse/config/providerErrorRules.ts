@@ -230,6 +230,11 @@ function buildOpenrouterRules(): ProviderErrorRule[] {
         if (status !== 429) return null;
         const text = JSON.stringify(body ?? "");
         if (!/free-models-per-day/i.test(text)) return null;
+        // cooldownMs here is a BOUNDED RE-PROBE, not a claimed daily-reset time.
+        // The free bucket resets on OpenRouter's own (UTC-day) schedule, which
+        // the free-access quota layer surfaces separately as quotaResetAt. 1h
+        // just keeps combo routing off a hot-loop against a spent daily budget
+        // without OmniRoute inventing a precise reset it cannot know.
         return { reason: "quota_exhausted", scope: "connection", cooldownMs: 60 * 60 * 1000 };
       },
     },

@@ -1012,6 +1012,13 @@ export async function createVirtualAutoComboFromPrepared(
 
   if (spec?.tier === "free" && effectivePool.length > 0) {
     const stateRequests = new Map<string, Promise<ProviderRuntimeState>>();
+    // Keyed by provider:connection only — model is deliberately omitted from the
+    // key. filterFreeCandidatesByRuntimeState reads exclusively the
+    // provider-account fields of the state (quotaState / quotaScope /
+    // accountState === provider_account exhaustion), none of which are
+    // model-derived, so one state per connection is correct here. A future
+    // consumer that needs the model-scoped fields (costClass, model lockout)
+    // must NOT reuse this deduplicated map.
     for (const candidate of effectivePool) {
       const connectionIds = [
         ...(candidate.allowedConnectionIds ?? []),
