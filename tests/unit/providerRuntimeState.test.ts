@@ -586,6 +586,46 @@ describe("Provider Runtime State", () => {
       assert.equal(isFreeCandidateEligible(state), true);
     });
 
+    // O9-F3.3P1-C1: trial != recurring free. A catalog entry whose ONLY free
+    // regime is one-time-initial (Cerebras' $5 30-day signup credit) must NOT
+    // be classified free_tier here — grantsRecurringFreeAccess excludes it.
+    it("does NOT classify a one-time-initial (trial-credit) catalog model as free_tier", async () => {
+      const { getProviderRuntimeState, isFreeCandidateEligible } =
+        await import("../../open-sse/services/providerRuntimeState.ts");
+      const state = await getProviderRuntimeState("cerebras", "conn-cb", "zai-glm-4.7", {
+        connection: {
+          id: "conn-cb",
+          provider: "cerebras",
+          authType: "apikey",
+          testStatus: "active",
+          isActive: true,
+        },
+        billing: METERED,
+      });
+
+      assert.equal(state.costClass, "paid", "one-time-initial is not a sustained free tier");
+      assert.equal(isFreeCandidateEligible(state), false);
+    });
+
+    // Groq's recurring-daily entries remain free_tier — the C1 change narrows to
+    // RECURRING regimes only, it does not drop recurring-* free tiers.
+    it("keeps a recurring-daily catalog model (Groq free tier) classified free_tier", async () => {
+      const { getProviderRuntimeState } =
+        await import("../../open-sse/services/providerRuntimeState.ts");
+      const state = await getProviderRuntimeState("groq", "conn-gq", "openai/gpt-oss-120b", {
+        connection: {
+          id: "conn-gq",
+          provider: "groq",
+          authType: "apikey",
+          testStatus: "active",
+          isActive: true,
+        },
+        billing: METERED,
+      });
+
+      assert.equal(state.costClass, "free_tier");
+    });
+
     it("leaves provider-account exhaustion classification unchanged for a catalog-proven free model", async () => {
       const { getProviderRuntimeState } =
         await import("../../open-sse/services/providerRuntimeState.ts");

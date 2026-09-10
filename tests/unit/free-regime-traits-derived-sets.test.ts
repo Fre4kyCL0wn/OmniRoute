@@ -6,6 +6,7 @@ import {
   computeFreeModelTotals,
   freeTypesInBucket,
   grantsFreeAccess,
+  grantsRecurringFreeAccess,
   type FreeModelFreeType,
 } from "../../open-sse/config/freeModelCatalog.ts";
 
@@ -67,6 +68,57 @@ test("a regime that grants no free access feeds no total", () => {
       FREE_REGIME_TRAITS[freeType].tokenBucket,
       "none",
       `${freeType} does not grant free access, so it cannot feed a free-tier total`
+    );
+  }
+});
+
+// O9-F3.3P1-C1 — trial != recurring free. `grantsFreeAccess` stays "any
+// documented free access" (a signup credit IS free while it lasts); the new
+// `grantsRecurringFreeAccess` is the stricter predicate routing/runtime
+// cost-class decisions read so a spent-and-gone one-time credit is never
+// treated as a sustained free tier.
+test("grantsRecurringFreeAccess: one-time-initial is NOT recurring; every recurring-* regime and keyless are", () => {
+  const expected: Record<FreeModelFreeType, boolean> = {
+    "recurring-daily": true,
+    "recurring-monthly": true,
+    "recurring-credit": true,
+    "recurring-uncapped": true,
+    "one-time-initial": false,
+    keyless: true,
+    discontinued: false,
+  };
+  for (const [freeType, verdict] of Object.entries(expected)) {
+    assert.equal(
+      grantsRecurringFreeAccess(freeType as FreeModelFreeType),
+      verdict,
+      `grantsRecurringFreeAccess(${freeType}) must be ${verdict}`
+    );
+  }
+});
+
+test("grantsRecurringFreeAccess never widens grantsFreeAccess (strict subset)", () => {
+  for (const freeType of ALL_FREE_TYPES) {
+    if (grantsRecurringFreeAccess(freeType)) {
+      assert.equal(
+        grantsFreeAccess(freeType),
+        true,
+        `${freeType}: recurring-free implies any-free`
+      );
+    }
+  }
+  // And it is genuinely stricter: at least one regime grants free access but not recurring.
+  assert.equal(grantsFreeAccess("one-time-initial"), true);
+  assert.equal(grantsRecurringFreeAccess("one-time-initial"), false);
+});
+
+test("grantsRecurringFreeAccess is derived from the tokenBucket table, not a second hand-kept list", () => {
+  const RECURRING_BUCKETS = new Set(["steady-monthly", "recurring-credit", "uncapped"]);
+  for (const freeType of ALL_FREE_TYPES) {
+    const t = FREE_REGIME_TRAITS[freeType];
+    assert.equal(
+      grantsRecurringFreeAccess(freeType),
+      t.grantsFreeAccess && RECURRING_BUCKETS.has(t.tokenBucket),
+      `${freeType}: predicate must equal grantsFreeAccess && recurring-bucket`
     );
   }
 });

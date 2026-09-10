@@ -101,6 +101,21 @@ The normalized state contains / will contain:
 - No optimistic TRUE assumptions.
 - Fail closed when required information is missing.
 
+### Free access — three distinct concepts (O9-F3.3P1-C1)
+
+These must never share one boolean:
+
+| Concept                        | Predicate / source                                                                                                                                              | Meaning                                                                                                                                                                                                                                                                                 |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ANY free access**            | `grantsFreeAccess(freeType)` (`freeModelCatalog.ts`)                                                                                                            | Some cost-free path exists right now — includes a one-off signup / trial credit while it lasts. Only `discontinued` (retired behind a paid key) is excluded. Read by UI, `/v1/models` free-flagging, "import free models only", `hidePaidModels`. **Unchanged** by P1-C1.               |
+| **RECURRING free access**      | `grantsRecurringFreeAccess(freeType)` (`freeModelCatalog.ts`, new)                                                                                              | The allowance renews on its own — daily / monthly / refilling credit / genuinely uncapped — or is a permanently-free `keyless` regime. A `one-time-initial` signup credit (spent once, gone) is **not** recurring. Read by `providerRuntimeState.classifyCostClass` (`metered` branch). |
+| **VERIFIED zero-cost routing** | `costClass === "verified_free"` (only `billing:"keyless"`) **+** STRICT_ZERO_COST (`freeAccessPolicy === "strict"`: `hardStopGuaranteed` **+** live-SAFE quota) | Hard guarantee of no incremental spend. `hasFree` / `freeNote` / marketing text are never sufficient.                                                                                                                                                                                   |
+
+`classifyCostClass` (`metered` connection) returns `free_tier` **only** when the exact
+`(provider, model)` pair is in the curated catalog **and** `grantsRecurringFreeAccess(freeType)`
+is true. A trial-credit-only catalog entry classifies as `paid` here. `keyless` billing still
+maps directly to `verified_free`; unknown billing stays `unknown` (fail-closed).
+
 ## OpenRouter Semantics
 
 Real error:
@@ -161,9 +176,26 @@ outside this connection-scoped special case are unchanged (#1731 regression-guar
 ## Provider Roadmap
 
 - **F3.3P0**: Provider State Foundation — **COMPLETE**
-- **F3.3P1**: Groq + Cerebras direct — **NOT STARTED / NOT YET AUTHORIZED FOR THIS RUN**
+- **F3.3P1-A**: Groq + Cerebras architecture audit — **COMPLETE** (both already fully wired as
+  `format:"openai"` / `executor:"default"` apikey providers; no new transport needed)
+- **F3.3P1-C1**: Free regime semantics — trial != recurring free — **COMPLETE** (this change)
+- **F3.3P1** (remaining C2..F): Groq quota/error semantics, capability producer, verified-free
+  discovery, credential wiring, controlled shadow validation — **NOT STARTED**
 - **F3.3P2**: Gemini + NVIDIA direct — **NOT STARTED**
 - **After**: Credential Broker
+
+### Groq / Cerebras classification
+
+- **Groq** — `DIRECT_PROVIDER_ELIGIBLE`, `RECURRING_FREE_POOL_ELIGIBLE`. In
+  `LEGACY_FREE_PROVIDERS`; catalog regime `recurring-daily` with `hardStopGuaranteed:true`;
+  `$0` pricing; `classifyTier("groq", …) === free`. Already in `auto/best-free` when a key is
+  configured.
+- **Cerebras** — `DIRECT_PROVIDER_ELIGIBLE`, `TRIAL_ACCESS_AVAILABLE`,
+  `RECURRING_FREE_POOL_INELIGIBLE`. `#11773` / `#12591` reclassified it from a no-card
+  recurring trial to a one-time $5 / 30-day / card-gated signup credit. Catalog regime
+  `one-time-initial`; paid pricing rates; not in `freeProviders`; `classifyTier("cerebras", …)
+!== free`; `grantsRecurringFreeAccess("one-time-initial") === false` so
+  `classifyCostClass` never returns `free_tier` for it. Usable as a paid direct provider.
 
 Long-term target image:
 

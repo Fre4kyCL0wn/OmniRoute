@@ -24,7 +24,7 @@
 import { getCachedProviderConnectionById } from "@/lib/db/readCache";
 import { classify429, type FailureKind } from "@/shared/utils/classify429";
 import { getCircuitBreaker, type CircuitBreakerStatus } from "@/shared/utils/circuitBreaker";
-import { grantsFreeAccess } from "@omniroute/open-sse/config/freeModelCatalog.ts";
+import { grantsRecurringFreeAccess } from "@omniroute/open-sse/config/freeModelCatalog.ts";
 
 import { getModelLockoutInfo } from "./accountFallback";
 import {
@@ -279,10 +279,18 @@ function classifyCostClass(
     case "metered": {
       // Fail-closed: a metered connection is free_tier ONLY when the exact
       // (provider, model) pair is proven free by the curated free-model
-      // catalog. A ":free" suffix or a SAFE free-access allowance proves
-      // nothing about THIS model's economics and is never sufficient.
+      // catalog AND its regime is a RECURRING free allowance. A ":free" suffix
+      // or a SAFE free-access allowance proves nothing about THIS model's
+      // economics; a one-off signup/trial credit (freeType "one-time-initial",
+      // e.g. Cerebras' $5 30-day credit) grants access while it lasts but is
+      // not a sustained free tier — `grantsRecurringFreeAccess` excludes it so
+      // a spent-and-gone credit never shows up here as free_tier. Groq's
+      // recurring-daily entries and OpenRouter's curated free models stay
+      // free_tier unchanged.
       const entry = findBudgetEntry({ provider, model });
-      return entry !== undefined && grantsFreeAccess(entry.freeType) ? "free_tier" : "paid";
+      return entry !== undefined && grantsRecurringFreeAccess(entry.freeType)
+        ? "free_tier"
+        : "paid";
     }
     case "unknown":
     default:
