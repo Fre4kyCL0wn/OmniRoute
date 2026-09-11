@@ -292,6 +292,7 @@ export function classify429(response: {
  * - integer seconds: `"60"`
  * - HTTP date: `"Wed, 08 May 2026 03:00:00 GMT"`
  * - Groq-style relative: `"60s"`, `"5m"`, `"2h"`
+ * - Compound duration: `"2m59.56s"`, `"1h30m"`, `"2h5m30s"`
  *
  * Returns `null` if unparseable.
  *
@@ -304,7 +305,28 @@ export function parseRetryAfter(headerValue: string | undefined): number | null 
   const trimmed = headerValue.trim();
   if (!trimmed) return null;
 
-  // Groq-style relative: must check BEFORE plain int parse.
+  // Compound Groq-style: "2m59.56s", "1h30m", "2h5m30s" — multiple
+  // numeric+unit segments summed. Must check BEFORE single-unit parse.
+  const compoundMatch =
+    /^(\d+(?:\.\d+)?)([smh])(\d+(?:\.\d+)?)([smh])(?:(\d+(?:\.\d+)?)([smh]))?$/i.exec(trimmed);
+  if (compoundMatch) {
+    let total = 0;
+    for (let i = 1; i <= 5; i += 2) {
+      const val = compoundMatch[i];
+      const unit = compoundMatch[i + 1];
+      if (!val || !unit) break;
+      const n = Number(val);
+      if (!Number.isFinite(n)) return null;
+      const u = unit.toLowerCase();
+      if (u === "s") total += n;
+      else if (u === "m") total += n * 60;
+      else if (u === "h") total += n * 3600;
+      else return null;
+    }
+    return total > 0 ? total : null;
+  }
+
+  // Single Groq-style relative: must check BEFORE plain int parse.
   const relMatch = trimmed.match(/^(\d+)([smh])$/i);
   if (relMatch) {
     const n = Number(relMatch[1]);

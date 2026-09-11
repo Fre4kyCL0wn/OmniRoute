@@ -167,6 +167,8 @@ export interface RegistryEntry {
   clientVersion?: string;
   timeoutMs?: number;
   passthroughModels?: boolean;
+  /** Use per-model lockouts for model-specific upstream quota failures. */
+  perModelQuota?: boolean;
   /**
    * Whether a non-empty synchronized live model list is exhaustive enough
    * to reject static registry IDs that it omits.

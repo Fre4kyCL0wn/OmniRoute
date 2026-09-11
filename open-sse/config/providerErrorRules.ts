@@ -248,6 +248,35 @@ function buildOpenrouterRules(): ProviderErrorRule[] {
   ];
 }
 
+// ─── Groq ──────────────────────────────────────────────────────────────────
+// Groq enforces per-model RPM/RPD/TPM/TPD limits. The x-ratelimit-* headers
+// reflect the CURRENT WINDOW (RPM/TPM), not the daily window (RPD/TPD).
+// When remaining-requests hits 0 on a 429, the model's daily request quota
+// is exhausted — lock at model scope (not connection or provider).
+// We hold no reliable organizationId/projectId for Groq, so we never
+// infer provider-wide exhaustion from a single connection's signal.
+//
+// NOTE: Without real Groq TPD/RPD 429 body fixtures, we cannot build a
+// body-text matcher for daily quota exhaustion. The remaining-requests: 0
+// signal is the closest available proxy. If live shadow validation reveals
+// that remaining-requests: 0 can fire for RPM (not just RPD), this rule
+// should be refined with the actual Groq 429 body patterns.
+function buildGroqRules(): ProviderErrorRule[] {
+  return [
+    {
+      id: "groq-model-daily-quota-exhausted",
+      match: ({ status, headers }) => {
+        if (status !== 429) return null;
+        const remaining = headers["x-ratelimit-remaining-requests"];
+        if (remaining !== "0") return null;
+        // remaining-requests: 0 on a 429 → model's daily request quota is
+        // exhausted. Model scope because Groq limits are per-model.
+        return { reason: "quota_exhausted", scope: "model" };
+      },
+    },
+  ];
+}
+
 // ─── AgentRouter ────────────────────────────────────────────────────────────
 // agentrouter.org misstates temporary quota exhaustion as 403/400 with a
 // Chinese body. upstreamStatusRestatement.ts rewrites the status to 429
@@ -321,6 +350,7 @@ export const providerRuleRegistry = new Map<string, ProviderErrorRule[]>([
   ["minimax-passthrough", buildMinimaxRules()],
   ["cloudflare-ai", buildCloudflareAiRules()],
   ["openrouter", buildOpenrouterRules()],
+  ["groq", buildGroqRules()],
   ["agentrouter", buildAgentrouterRules()],
 ]);
 
@@ -340,7 +370,7 @@ export const providerRuleRegistry = new Map<string, ProviderErrorRule[]>([
  * mechanism (#11104) silently inert for every provider except the ones listed
  * below. See `hasOperatorRuleForProvider`.
  */
-const HONORS_RULE_LOCK_SCOPE_PROVIDERS = new Set(["agentrouter", "openrouter"]);
+const HONORS_RULE_LOCK_SCOPE_PROVIDERS = new Set(["agentrouter", "openrouter", "groq"]);
 
 export function honorsRuleLockScope(provider: string | null | undefined): boolean {
   if (!provider) return false;

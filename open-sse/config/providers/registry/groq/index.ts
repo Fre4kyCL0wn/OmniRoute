@@ -8,6 +8,7 @@ export const groqProvider: RegistryEntry = {
   baseUrl: "https://api.groq.com/openai/v1/chat/completions",
   authType: "apikey",
   authHeader: "bearer",
+  perModelQuota: true,
   models: [
     // Non-reasoning Llama models: Groq returns HTTP 400 if reasoning_effort is sent (#3258).
     {
