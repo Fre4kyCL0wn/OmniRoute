@@ -104,6 +104,12 @@ export const scoringWeightsSchema = z
     connectionDensity: z.number().min(0).max(1).optional().default(0.0476),
     quality: z.number().min(0).max(1).optional().default(0.03),
     reliability: z.number().min(0).max(1).optional().default(0),
+    // O9-F3.3P1-D5: FCC soft preference factor. Same reasoning as above — must
+    // be declared here or a saved config silently drops it and renormalizes
+    // the rest. Default 0: this must NOT change any stored config's effective
+    // routing (unlike connectionDensity/quality above, which shipped with a
+    // deliberate nonzero default and DID change stored-config routing).
+    fccPreference: z.number().min(0).max(1).optional().default(0),
   })
   .optional();
 

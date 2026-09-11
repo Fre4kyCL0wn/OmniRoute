@@ -36,6 +36,17 @@ export interface ScoringFactors {
    * observations is neutral at 0.5, a failure rate with no observations is 0.
    */
   reliability?: number;
+  /**
+   * O9-F3.3P1-D5: FCC (Free Claude Code) soft preference signal [0,1] — pure
+   * corroborating evidence, computed ONLY on top of an already-proven hard
+   * gate (`executable === true` AND `claudeCodeEligible === true`, see
+   * `fccRankingSignal.ts`). Route-scoped: `calculateFactors` reads this only
+   * when `taskType === "coding"`; on every other route it evaluates to 0
+   * regardless of the candidate's raw value. Missing/0 is the neutral "no
+   * preference" case, never a penalty — this is NOT eligibility and must
+   * never be confused with `claudeCodeEligible` itself.
+   */
+  fccPreference?: number;
 }
 
 export interface ScoringWeights {
@@ -57,6 +68,13 @@ export interface ScoringWeights {
   quality?: number;
   /** Weight for the observed failure-rate factor. 0 by default. */
   reliability?: number;
+  /**
+   * Weight for the FCC soft preference factor (O9-F3.3P1-D5). MUST default to
+   * 0 — see `DEFAULT_WEIGHTS`. A nonzero value is a deliberate, later,
+   * explicit rollout decision (D6), never an implicit side effect of shipping
+   * this field.
+   */
+  fccPreference?: number;
 }
 
 export const DEFAULT_WEIGHTS: ScoringWeights = {
@@ -84,6 +102,12 @@ export const DEFAULT_WEIGHTS: ScoringWeights = {
   // no way to read it. Which weight it deserves is a product call backed by
   // measurement, so this ships at 0 and leaves the ranking exactly as it was.
   reliability: 0,
+  // O9-F3.3P1-D5: declared but silent, exactly like `cacheAffinity` /
+  // `resetWindowAffinity` / `reliability` above — the mechanism ships wired
+  // end-to-end, but ranking is BYTE-IDENTICAL to pre-D5 until an operator (D6)
+  // makes an explicit, measured decision to set this above 0. Sum remains
+  // exactly 1.0 (this adds 0).
+  fccPreference: 0,
 };
 
 /** Normalize independently configured UI weights into a scoring distribution. */
@@ -142,6 +166,16 @@ export interface ProviderCandidate {
   quality?: number;
   connectionPoolSize?: number;
   connectionId?: string;
+  /**
+   * O9-F3.3P1-D5: raw FCC soft-preference fact [0,1] for this (provider,
+   * model), precomputed by the candidate builder via
+   * `resolveFccPreferenceSignal` (fccRankingSignal.ts) — already hard-gated
+   * on `executable && claudeCodeEligible` at construction time. 0 when no
+   * signal applies (unknown eligibility, proven-incompatible, or FCC has no
+   * / a negative verdict). Route-scoping (coding-only) happens in
+   * `calculateFactors`, not here.
+   */
+  fccPreference?: number;
 }
 
 export interface ScoredProvider {
@@ -180,7 +214,12 @@ export function calculateScore(factors: ScoringFactors, weights: ScoringWeights)
       (weights.quality ?? 0) * (factors.quality ?? 0.5) +
       // Missing reliability factor -> neutral 1, not 0.5: a candidate with no
       // observations has not failed anything. See the field doc on ScoringFactors.
-      (weights.reliability ?? 0) * (factors.reliability ?? 1)
+      (weights.reliability ?? 0) * (factors.reliability ?? 1) +
+      // O9-F3.3P1-D5: missing/inapplicable FCC preference -> neutral 0, not
+      // 0.5 -- "no corroborating evidence" is not "average", and weight
+      // defaults to 0 (DEFAULT_WEIGHTS), so this term is inert until D6
+      // explicitly activates it.
+      (weights.fccPreference ?? 0) * (factors.fccPreference ?? 0)
   );
 }
 
@@ -328,6 +367,13 @@ export function calculateFactors(
     // `clamp01(1 - NaN)` would be 0, i.e. "fails every call", which is the
     // opposite of what corrupt telemetry should mean.
     reliability: clamp01(1 - boundedRate(candidate.failureRate ?? candidate.errorRate)),
+    // O9-F3.3P1-D5: route-scoped on purpose — a request that does not need
+    // coding/Claude-Code compatibility gets a flat 0 here regardless of the
+    // candidate's raw fccPreference fact, so FCC evidence never becomes a
+    // global "FCC model is always better" bias (Schritt 6). `taskType` is the
+    // existing, already-classified routing signal (intentClassifier.ts /
+    // mapIntentToTaskType) — no new route-detection mechanism was added.
+    fccPreference: taskType === "coding" ? clamp01(candidate.fccPreference ?? 0) : 0,
   };
 }
 

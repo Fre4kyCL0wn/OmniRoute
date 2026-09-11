@@ -21,6 +21,18 @@
   NVIDIA (3 true, 1 false); Groq/Cerebras/OpenRouter stay unseeded (no sufficient per-model
   evidence found — not a defect). D4's gate logic untouched. Visibility: 0 → 10 models (see
   below)
+- **O9-F3.3P1-D4.2 — Groq Claude Code Compatibility Evidence (dedicated pass)**: **COMPLETE,
+  no-op result (2026-09-11)** — targeted re-verification of all 10 Groq registry models against
+  registry `RegistryModel.toolCalling`, static `ModelSpec.supportsTools`, existing Groq-specific
+  tests, and the generic translator/tool-roundtrip tests; confirms D4.1's Groq finding exactly:
+  0 true / 0 false / 10 unknown. No new evidence found, no code or data change made, D4 gate logic
+  untouched. See "D4.2 Groq Re-Verification" below.
+- **O9-F3.3P1-D5 — FCC Preferred-Candidate Ranking Wiring**: **COMPLETE, inert by default
+  (2026-09-11, pending review, not committed)** — wires D0's `computeFccRankingSignal` into live
+  AutoCombo scoring as a new route-scoped, hard-gated, additive `fccPreference` factor.
+  `DEFAULT_WEIGHTS.fccPreference = 0`: routing is byte-identical to pre-D5 until an operator (D6)
+  explicitly raises it. No eligibility created, no model unlocked, D4.1/D4.2 counts unchanged. See
+  "D5 FCC Preferred-Candidate Ranking Wiring" below.
 
 O9-F3.3P0 builds the foundation for a future direct, independent free / free-tier
 provider pool. Planned later: Groq, Cerebras, Gemini / Google AI Studio, NVIDIA NIM.
@@ -633,6 +645,149 @@ compatibility remains completely independent of cost/free classification through
 recurring-daily trial status (O9-F3.3P1-C1) and Groq's quota semantics (O9-F3.3P1-C2) were not
 read, referenced, or altered by any part of this evidence layer.
 
+## D4.2 Groq Re-Verification (O9-F3.3P1-D4.2)
+
+A dedicated, Groq-only re-pass over D4.1's evidence question, run in isolation to make sure the
+"10 unseeded" result wasn't an artifact of D4.1's broader multi-provider sweep. Scope was
+constrained to in-repo evidence only — no provider requests, no models.dev sync, no production/
+shadow actions.
+
+**Checked, per Groq registry model** (`open-sse/config/providers/registry/groq/index.ts`, 10
+models: `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile`, `groq/compound`,
+`allam-2-7b`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3-32b`, `qwen/qwen3.6-27b`,
+`qwen/qwen3.8-27b`, `openai/gpt-oss-safeguard-20b`):
+
+- Registry `toolCalling` field — absent on all 10 entries.
+- Static `ModelSpec.supportsTools` (`src/shared/constants/modelSpecs.ts`) — no exact or
+  prefix-matched spec exists for any of the 10 (the visually-similar `qwen3-max` /
+  `qwen3.6-plus` / `qwen3.8-max-preview` entries are a different Alibaba Qwen3-Max/Plus family
+  and do not prefix-match Groq's `qwen3-32b` / `qwen3.6-27b` / `qwen3.8-27b`).
+- Existing Groq-specific tests (`groq-field-strip-wiring`, `groq-quota-semantics`,
+  `thinking-budget-groq-12134`, `thinking-budget-groq-3258`) — none assert tool-calling behavior.
+- Generic translator/tool-roundtrip tests (`translator-tool-call-shim`,
+  `anthropic-toolcall-args-6459`, `nvidia-tool-compatibility-2840`) — confirmed provider-agnostic
+  (no Groq references); proves the mechanism only, not a per-model fact, per the D4.1 "AND" bar.
+- models.dev — no committed in-repo snapshot with Groq tool-calling data; the only pathway
+  (`src/lib/modelsDevSync.ts`) is a live/DB-backed runtime layer D1 deliberately excludes from
+  static extraction — out of scope here (no provider requests).
+- FCC provider presence (`mapFccProvider("groq")` maps) — confirmed insufficient by construction,
+  per the existing D0/D4.1 invariant; not used.
+
+**Result: 0 true / 0 false / 10 unknown — identical to D4.1.** Already locked in by
+`tests/unit/claudeCodeCompatEvidence.test.ts` test 9, which enumerates the real Groq model list
+and asserts every one stays `claudeCodeEligible: null`. No new evidence surfaced, so no change was
+made to `directCapabilities.data.ts`'s `DIRECT_PROVIDER_JUDGEMENTS.groq` block, and no test was
+added (the existing test 9 already covers this exact invariant by id). Fail-closed contract
+preserved; D4's gate logic untouched.
+
+## D5 FCC Preferred-Candidate Ranking Wiring (O9-F3.3P1-D5)
+
+D5 wires D0's already-built, already-tested `computeFccRankingSignal` (`fccRankingSignal.ts`) into
+live AutoCombo scoring — the one piece D0 explicitly deferred ("This module is NOT wired into
+`combo.ts` scoring yet"). It adds exactly one thing: a **soft, additive ranking factor** on top of
+candidates that have ALREADY passed the existing hard eligibility gate. It does **not** grant
+eligibility, does **not** unlock any model, and does **not** touch D1–D4's fact layer, D4.1/D4.2's
+evidence, or health/quota/cost policy.
+
+### Hard eligibility vs. soft FCC preference
+
+These stay two different things, on purpose (Schritt 2 of the D5 spec):
+
+- **`claudeCodeEligible`** (D1/D2, curated from registry/static/models.dev/shadow-validation
+  facts) — the HARD FACT/HARD GATE. Can come from several evidence sources; D5 does not touch how
+  it is computed, and cannot turn a `null`/`false` verdict into `true`.
+- **FCC evidence** (`fccKnown`, `fccClaudeCodeCompatible`, …) — a SOFT, purely additive ranking
+  signal, only ever consulted once the hard gate has already passed. Not a second eligibility
+  source.
+- **Runtime state** (health, quota, cooldown, cost, model lockout, connection state) — unchanged,
+  untouched, remains sole authority. FCC preference can never override it (see "Quota/status
+  interaction" below).
+
+### What was added
+
+- `open-sse/services/fccRankingSignal.ts` — `resolveFccPreferenceSignal(provider, model): number`,
+  a thin wrapper that feeds the UNCHANGED D0 `computeFccRankingSignal` with real D1/D2 facts
+  (`extractProviderModelInfo` → `produceCapabilities`) instead of a test fixture. Returns `1` only
+  when `executable === true` AND `claudeCodeEligible === true` AND FCC's own
+  `fccClaudeCodeCompatible === true` (not merely `applies === true` — see the function's docblock
+  for why `applies` alone is not sufficient). Otherwise `0`, never a penalty.
+- `open-sse/services/combo.ts` (`buildAutoCandidates`) — one field added to the already-existing
+  per-candidate object: `fccPreference: resolveFccPreferenceSignal(provider, model)`. Pure,
+  DB-free, computed inline alongside the existing `quality` signal — no new async work, no DB
+  query, no provider request.
+- `open-sse/services/autoCombo/scoring.ts` — `ProviderCandidate.fccPreference` (raw fact),
+  `ScoringFactors.fccPreference` (route-scoped value), `ScoringWeights.fccPreference` (weight,
+  default `0`), and `calculateScore`'s weighted sum extended by one additive term. The 14 existing
+  factors are byte-unchanged in meaning.
+- `src/shared/validation/schemas/combo.ts` (`scoringWeightsSchema`) and
+  `src/lib/combos/intelligentRouting.ts` (`DEFAULT_INTELLIGENT_WEIGHTS` / `IntelligentRoutingWeights`
+  / `normalizeIntelligentRoutingConfig`) — kept in sync with `DEFAULT_WEIGHTS`, exactly as the
+  existing `combo-scoring-weights-schema-coverage.test.ts` already requires for every scorer
+  factor (this is not new surface D5 invented; it is the existing "every weight must be declared
+  in three places" contract, now covering one more field).
+
+### Route scope
+
+The factor is **route-scoped**, not global (Schritt 6): `calculateFactors` reads
+`candidate.fccPreference` only when `taskType === "coding"` — the EXISTING, already-classified
+routing signal (`intentClassifier.ts` → `mapIntentToTaskType`). On every other route (`"default"`,
+`"analysis"`) the factor evaluates to exactly `0` regardless of the candidate's raw value. No new
+route-detection mechanism was added, and there is no global "FCC model is always better" bias.
+
+### Default weight is 0 — no routing change until explicitly enabled
+
+`DEFAULT_WEIGHTS.fccPreference = 0`, declared but silent — the exact same pattern already used for
+`cacheAffinity`, `resetWindowAffinity`, and `reliability`. With the default weight, every scoring
+formula term this factor contributes is `0 * factors.fccPreference`, so **live routing is
+byte-identical to pre-D5** regardless of what `fccPreference` resolves to per candidate. Raising
+this weight above 0 is a deliberate, later, explicit operator decision — that activation point is
+**D6**, not this change.
+
+### Quota/status interaction
+
+Existing `QUOTA_SOFT_DEPRIORITIZE_FACTOR` / `STATUS_SOFT_DEPRIORITIZE_FACTOR` and their application
+order in `autoStrategy.ts`'s `scoreAutoTargets` are untouched — D5 did not modify `autoStrategy.ts`
+at all. At a realistic activation weight (tested at `0.05`, the same order of magnitude as
+`quality`'s `0.03`), a quota-soft-penalized or status-penalized candidate with `fccPreference`
+still ranks strictly below an identical healthy, non-preferred candidate — the soft penalty
+multiplier is applied to the WHOLE score (base + FCC term alike), so it still dominates at any
+weight an operator would plausibly set. This is a soft, not absolute, guarantee: an operator who
+set `fccPreference` far above every other weight could in principle out-weigh a `0.5`/`0.7`
+multiplicative penalty — the correct fix for that hypothetical is a sane weight, never a new magic
+constant invented to force the ordering (Schritt 11), and D6's activation should set a small value
+for exactly this reason.
+
+### FCC data reality (Schritt 14 — documented, not fixed here)
+
+`fccCatalog.data.ts` remains the D0 fixture-illustrative dataset (3 entries: groq, cerebras,
+targon) — D3 only synced the FCC **provider-descriptor** catalog, not a per-model capability
+catalog (see the D3 section above). `resolveFccPreferenceSignal` is production-shaped and fully
+wired end-to-end, but with only 3 fixture rows and `DEFAULT_WEIGHTS.fccPreference = 0`, it has
+**zero observable effect on live routing today** — confirmed by test: even Groq's/Cerebras'
+`gpt-oss-120b` (both of which the fixture marks `claudeCode.compatible: true`) resolve to `0`,
+because neither has a proven `claudeCodeEligible` fact (D4.1/D4.2). The hard gate is doing exactly
+what it is supposed to do against real data. Before D6 raises the weight, either the fixture should
+be replaced by a real synced FCC snapshot, or the D6 activation must say explicitly why it is
+proceeding without one.
+
+Also per Schritt 14: `resolveFccPreferenceSignal` does a direct `getFccEvidence(provider, model)`
+lookup, i.e. assumes the Jarvis provider id equals the FCC provider id. True for every provider
+`directCapabilities.data.ts` currently seeds (groq, cerebras, gemini, nvidia), but not for the 3
+providers in `FCC_PROVIDER_ID_MAP` whose FCC id differs (`nvidia_nim`→`nvidia`,
+`open_router`→`openrouter`, `cloudflare`→`cloudflare-ai`) — for those, real FCC evidence keyed
+under the FCC spelling would be silently missed (never a false positive). The fixture has zero
+entries under any of those 3 FCC ids today, so this has no observable effect right now; a
+`FCC_PROVIDER_ID_MAP` reverse lookup was deliberately not built for D5 (no evidence to serve it
+yet).
+
+### Not in D5 (explicit boundary)
+
+No `claudeCodeReady`/`claudeCodeEligible` value changed (D4.1 counts stay 10 true / 1 false / 2674
+null; Groq stays 0/0/10; Cerebras and OpenRouter stay unseeded — no unlock). No cost/free
+classification touched (Cerebras C1, Groq C2 untouched). No production/shadow activation — that is
+**D6**: setting a nonzero `fccPreference` weight, and/or `ANTHROPIC_BASE_URL` /
+`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` activation, remain a separate, later, controlled step.
+
 ## Candidate Suppression
 
 The earlier `suppressExhaustedFreeCandidates()` was misleading (it surfaced only a single
@@ -693,8 +848,13 @@ outside this connection-scoped special case are unchanged (#1731 regression-guar
 - **F3.3P1-D4.1**: Claude Code Compatibility Evidence, Tranche 1 (Gemini 7 true, NVIDIA 3 true +
   1 false; Groq/Cerebras/OpenRouter unseeded — insufficient per-model evidence) — **COMPLETE
   (this change, pending review)**; 10 models now visible via the D4 gate, up from 0
+- **F3.3P1-D4.2**: Groq Claude Code Compatibility Evidence, dedicated re-verification — **COMPLETE,
+  no-op (2026-09-11)**; confirms D4.1's 0 true / 0 false / 10 unknown for Groq, no new evidence,
+  no code/data change
 - **F3.3P1-D5**: FCC ranking / preferred-candidate selection wiring into `combo.ts` live scoring —
-  **NOT STARTED**
+  **COMPLETE, inert by default (2026-09-11, pending review, not committed)**; `fccPreference`
+  factor wired end-to-end at `DEFAULT_WEIGHTS.fccPreference = 0` — see "D5 FCC Preferred-Candidate
+  Ranking Wiring" above
 - **F3.3P1-D6**: Controlled Shadow activation (Claude Code launch, `ANTHROPIC_BASE_URL` /
   `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`, live provider requests) — **NOT STARTED**
 - **F3.3P1** (remaining): verified-free discovery, credential wiring — **NOT STARTED**
