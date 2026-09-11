@@ -27,11 +27,14 @@
   tests, and the generic translator/tool-roundtrip tests; confirms D4.1's Groq finding exactly:
   0 true / 0 false / 10 unknown. No new evidence found, no code or data change made, D4 gate logic
   untouched. See "D4.2 Groq Re-Verification" below.
-- **O9-F3.3P1-D5 — FCC Preferred-Candidate Ranking Wiring**: **COMPLETE, inert by default
-  (2026-09-11, pending review, not committed)** — wires D0's `computeFccRankingSignal` into live
+- **O9-F3.3P1-D5 — FCC Preferred-Candidate Ranking Wiring**: **COMPLETE / COMMITTED / PUSHED**
+  (2026-09-11) — canonical commit `daa750704b58a2e48b27988eb0721061deb86710` on
+  `phase/o9-f3-3p1-d5-fcc-preferred-ranking`. Wires D0's `computeFccRankingSignal` into live
   AutoCombo scoring as a new route-scoped, hard-gated, additive `fccPreference` factor.
-  `DEFAULT_WEIGHTS.fccPreference = 0`: routing is byte-identical to pre-D5 until an operator (D6)
-  explicitly raises it. No eligibility created, no model unlocked, D4.1/D4.2 counts unchanged. See
+  `DEFAULT_WEIGHTS.fccPreference = 0`: routing is byte-identical to pre-D5 by default, and real
+  FCC preference coverage against current evidence is `0` (D5 ships as a dormant mechanism — see
+  below). No eligibility created, no model unlocked, D4.1/D4.2 counts unchanged. Real per-model FCC
+  evidence is still absent; **D6 must not claim real FCC ranking is already validated.** See
   "D5 FCC Preferred-Candidate Ranking Wiring" below.
 
 O9-F3.3P0 builds the foundation for a future direct, independent free / free-tier
@@ -357,7 +360,7 @@ OmniRoute registry id via one of four verdicts:
 `provider/model` path shape the Jarvis registry already uses (trims whitespace, collapses an
 accidental `provider/provider/model` duplication).
 
-### Ranking signal (not yet wired into live routing)
+### Ranking signal (wired into live routing by D5)
 
 `open-sse/services/fccRankingSignal.ts::computeFccRankingSignal(evidence, gate)` produces
 `{ fccKnown, fccClaudeCodeCompatible, fccCodexCompatible, fccOpenCodeCompatible, applies }`.
@@ -368,8 +371,9 @@ function (`FccRankingGate` carries no health/quota/cost fields). This is a hard 
 chooseFirst()` anti-pattern is explicitly rejected — FCC can only ever add a soft signal on top of
 an already-passed hard gate.
 
-**This signal is not yet wired into `open-sse/services/combo.ts` scoring** — D0 ships the pure,
-tested function; wiring it into live Auto-Combo ranking is a follow-up phase pending review.
+**This signal is now wired into live AutoCombo scoring** — D0 shipped the pure, tested function;
+O9-F3.3P1-D5 (commit `daa750704`, see below) wires it in as the additive `fccPreference` factor,
+at default weight `0` so routing is unchanged until an operator explicitly activates it (D6).
 
 ### Dynamic sync design (fixture-only in D0/P1)
 
@@ -852,7 +856,7 @@ outside this connection-scoped special case are unchanged (#1731 regression-guar
   no-op (2026-09-11)**; confirms D4.1's 0 true / 0 false / 10 unknown for Groq, no new evidence,
   no code/data change
 - **F3.3P1-D5**: FCC ranking / preferred-candidate selection wiring into `combo.ts` live scoring —
-  **COMPLETE, inert by default (2026-09-11, pending review, not committed)**; `fccPreference`
+  **COMPLETE / COMMITTED / PUSHED** (2026-09-11, commit `daa750704`), inert by default; `fccPreference`
   factor wired end-to-end at `DEFAULT_WEIGHTS.fccPreference = 0` — see "D5 FCC Preferred-Candidate
   Ranking Wiring" above
 - **F3.3P1-D6**: Controlled Shadow activation (Claude Code launch, `ANTHROPIC_BASE_URL` /
