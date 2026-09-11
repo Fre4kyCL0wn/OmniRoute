@@ -8,9 +8,14 @@
 - **O9-F3.3P1-D2 — Capability → Eligibility Producer**: **COMPLETE**
 - **O9-F3.3P1-D0 — FCC Preferred Catalog Integration Foundation**: **COMPLETE** —
   evidence-source abstraction + provider/model mapping + ranking signal + sync design
-- **O9-F3.3P1-D3 — FCC Upstream Catalog Snapshot & Sync**: **COMPLETE (this change)** — real,
+- **O9-F3.3P1-D3 — FCC Upstream Catalog Snapshot & Sync**: **COMPLETE** — real,
   pinned-revision, importer-generated provider snapshot (50 providers) + hand-curated discovery
-  classification + provider-level diff workflow; still not wired into live routing (see below)
+  classification + provider-level diff workflow; still not wired into live routing
+- **O9-F3.3P1-D4 — Native Claude Code Gateway Visibility**: **COMPLETE (this change, pending
+  review)** — re-scoped after audit found the gateway mirror already exists; adds only a
+  capability-aware visibility gate (executable + claudeCodeEligible, fail-closed) composed onto
+  the existing `claude/…` / `no-think/…` mirrors. No new gateway-id system, no FCC prefix
+  adopted, no `/v1/models` shape change with flags off (see below)
 
 O9-F3.3P0 builds the foundation for a future direct, independent free / free-tier
 provider pool. Planned later: Groq, Cerebras, Gemini / Google AI Studio, NVIDIA NIM.
@@ -475,6 +480,81 @@ provider ids, and no provider that would resolve to a `conflict` mapping against
 registry. Any failure keeps the previously-adopted snapshot; an empty candidate is never accepted
 as valid.
 
+## D4 Native Claude Code Gateway Visibility (O9-F3.3P1-D4)
+
+D4 was **re-scoped** after a read-only audit found OmniRoute already ships a production Claude
+Code gateway mirror — building a second, FCC-shaped `anthropic/<provider>/<model>` encode/decode
+system next to it would have duplicated proven infrastructure. D4 therefore adds exactly one
+missing piece: a **capability-aware visibility policy** on top of the existing mirrors, and
+touches nothing else.
+
+**Existing gateway mirror reused, unchanged, still sole authority for identity/routing:**
+
+- `claude/<provider>/<model>` discovery mirror — `open-sse/utils/ccDiscoveryAliases.ts`
+- `no-think/<provider>/<model>` mirror — `open-sse/utils/noThinkingAlias.ts` (itself a prior
+  free-claude-code port, "Fase 8.1")
+- Decode / request-path wiring — `open-sse/handlers/chatCore/ccDiscoveryAliasStrip.ts`,
+  `src/lib/ccDiscoveryAliasResolve.ts`, `applyNoThinkingAlias` — called from every chat transport
+  **before** provider resolution, so credential selection, health, quota, model lockout, cost
+  policy, and fallback all still run on the real model exactly as for any normal request
+- The 3-level (model > provider > global) DB flags — `src/lib/db/ccDiscoveryAliases.ts`,
+  `NO_THINKING_ALIAS_ENABLED` — **default off**, unchanged
+- **No second encode/decode system.** No FCC `anthropic/…` prefix adopted — Claude Code accepts
+  either `claude`- or `anthropic`-prefixed ids per the existing module's own docblock, and
+  OmniRoute's `claude/…` shape already has dedicated production test coverage
+  (`tests/unit/cc-discovery-alias-*.test.ts`, `tests/unit/no-thinking-alias.test.ts`) proving it
+  works — no reason to introduce a second shape.
+
+**What D4 adds**: `open-sse/services/claudeGatewayVisibility.ts`:
+
+- `evaluateClaudeGatewayVisibility(input)` — pure decision function, returns
+  `{ visible, reason }` with reasons `visible | feature-disabled | not-executable |
+claude-code-ineligible | claude-code-unknown | existing-alias-policy-rejected`.
+- `resolveClaudeGatewayCapabilities(provider, model)` — reads `executable` / `claudeCodeEligible`
+  directly from `produceCapabilities(extractProviderModelInfo(...))` (D1 → D2), **not** through
+  `getProviderRuntimeState`. Deliberate: that function is async, DB-backed, and mixes in
+  `providerHealth`/`quotaState`/cost — exactly the transient signals a model _catalog_ must never
+  flap on, and exactly the per-model DB cost a catalog build over many models must not pay
+  N times. `produceCapabilities` is the same producer `ProviderRuntimeState.capabilities` is
+  built from — this reuses that single source of truth, not a duplicate rule set.
+- `withClaudeGatewayCapabilityGate(existingPredicate)` — composes `existingPredicate(entry) AND
+capabilityGate(entry)`, wired at the `appendCcDiscoveryAliases` call site in
+  `catalogResponse.ts` (before mirror synthesis, so a rejected model never gets a wasted
+  `claude/…` entry allocated).
+- `filterNoThinkingMirrorsByCapability(models)` — post-filters the no-think mirrors
+  `appendNoThinkingVariants` already appended, removing ones that fail the new gate.
+  Post-filter (not an injected predicate) specifically so `noThinkingAlias.ts`'s own frozen
+  contract is never touched.
+
+Both integration points sit strictly **inside** the pre-existing flag guards in
+`catalogResponse.ts` — with every flag off, neither runs, and `/v1/models` is unchanged. With a
+flag on, only mirrors that also pass the new gate survive; every other catalog entry (including
+combos and bare-id entries, which D1/D2 have no capability facts for) passes through unmodified.
+
+**Visibility contract** (fail-closed, mirrors the D0/D2 invariants exactly — nothing new):
+
+- `executable` must be exactly `true` — registry-proven, not transient. `false`/`null` reject.
+- `claudeCodeEligible` must be exactly `true`. `null` (unknown) and `false` (proven negative) both
+  reject, with distinct reasons. **`null → true` is never done.**
+- FCC (D3) provider-catalog presence alone is **insufficient** by construction: D1's
+  `extractProviderModelInfo` does not read FCC evidence today, so "FCC knows this provider" cannot
+  leak into `claudeCodeEligible` through this path at all — matching the D3 finding that FCC's
+  provider catalog is not a model capability catalog, and the D0 invariant that FCC is
+  corroborating evidence, never an availability dependency. An `fcc_only` or `conflict`-mapped
+  provider id simply fails the `executable` check (unregistered in Jarvis), same as any other
+  unknown provider — no FCC-specific carve-out exists or is needed.
+- Currently `claudeCodeReady` (the D1 curated fact `claudeCodeEligible` derives from) is
+  **unseeded for every direct provider** — so today, turning the `claude/…` mirror flag on
+  advertises **nothing** via this gate until a real research pass proves specific
+  provider/model pairs. This is the intended, fail-closed consequence, not a bug — flagging it
+  because an operator who already has the flag on will see previously-visible mirrors disappear.
+
+**Not in D4** (explicit boundary): FCC ranking/preferred-candidate wiring into `combo.ts` live
+scoring is **D5**; actually starting Claude Code, setting `ANTHROPIC_BASE_URL` /
+`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`, or any Shadow-container activation is **D6**. D4
+ships the gate off-by-default alongside the (already off-by-default) mirrors it composes with —
+no behavior changes for any deployment that hasn't already opted into the mirror flags.
+
 ## Candidate Suppression
 
 The earlier `suppressExhaustedFreeCandidates()` was misleading (it surfaced only a single
@@ -528,12 +608,17 @@ outside this connection-scoped special case are unchanged (#1731 regression-guar
   provider/model mapping, ranking signal, sync design) — **COMPLETE**; ranking signal not yet
   wired into `combo.ts`
 - **F3.3P1-D3**: FCC Upstream Catalog Snapshot & Sync (real pinned-revision provider snapshot,
-  discovery classification, provider-level diff, last-known-good validation) — **COMPLETE (this
-  change)**; snapshot/diff not yet wired into live routing
-- **F3.3P1-D4**: Native Claude Code Gateway Catalog (dynamic Jarvis model discovery) — **NOT
-  STARTED** — renumbered from D3 to D4 in this pass; see note below
-- **F3.3P1** (remaining): verified-free discovery, credential wiring, controlled
-  shadow validation — **NOT STARTED**
+  discovery classification, provider-level diff, last-known-good validation) — **COMPLETE**;
+  snapshot/diff not yet wired into live routing
+- **F3.3P1-D4**: Native Claude Code Gateway Visibility (capability-aware gate composed onto the
+  existing `claude/…` / `no-think/…` mirrors — no new gateway-id system) — **COMPLETE (this
+  change, pending review)**; `claudeCodeReady` still unseeded, so the gate currently advertises
+  nothing new until a research pass proves specific provider/model pairs
+- **F3.3P1-D5**: FCC ranking / preferred-candidate selection wiring into `combo.ts` live scoring —
+  **NOT STARTED**
+- **F3.3P1-D6**: Controlled Shadow activation (Claude Code launch, `ANTHROPIC_BASE_URL` /
+  `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`, live provider requests) — **NOT STARTED**
+- **F3.3P1** (remaining): verified-free discovery, credential wiring — **NOT STARTED**
 - **F3.3P2**: Gemini + NVIDIA direct — **NOT STARTED**
 - **After**: Credential Broker
 

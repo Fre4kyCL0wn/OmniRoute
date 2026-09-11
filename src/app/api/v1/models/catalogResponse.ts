@@ -19,6 +19,10 @@ import {
 import { isCcAliasGlobalEnabled, getCcAliasSettingsBulk } from "@/lib/db/ccDiscoveryAliases";
 import { buildCcAliasPredicate } from "./ccAliasPredicate";
 import {
+  withClaudeGatewayCapabilityGate,
+  filterNoThinkingMirrorsByCapability,
+} from "@omniroute/open-sse/services/claudeGatewayVisibility";
+import {
   isFunctionalGatewayGlobalEnabled,
   getFunctionalGatewaySettingsBulk,
 } from "@/lib/db/functionalGatewayMirrors";
@@ -100,6 +104,13 @@ export async function applyCatalogPostFilters(
       ctx.prefixMode === "canonical" ? ctx.aliasToProviderId : undefined,
       { featureEnabled: isNoThinkingAliasEnabled() }
     );
+    // O9-F3.3P1-D4: capability-aware visibility gate on top of the existing
+    // no-think mirror rules (executable + claudeCodeEligible, fail-closed on
+    // unknown). Post-filter rather than an injected predicate so
+    // noThinkingAlias.ts's own contract stays untouched — see
+    // claudeGatewayVisibility.ts's docblock. No-op when nothing was appended
+    // above (flag off / hideNoThinkVariants).
+    finalModels = filterNoThinkingMirrorsByCapability(finalModels);
   }
 
   // Advertise `claude/<id>` discovery-mirror aliases so Claude Code's gateway
@@ -112,13 +123,21 @@ export async function applyCatalogPostFilters(
   const ccAliasGlobal = isCcAliasGlobalEnabled();
   const ccAliasSettings = getCcAliasSettingsBulk();
   if (ccAliasGlobal || ccAliasSettings.providers.size > 0 || ccAliasSettings.models.size > 0) {
+    // O9-F3.3P1-D4: capability-aware visibility gate composed ON TOP of the
+    // existing 3-level flag predicate (existingPredicate AND capabilityGate)
+    // — executable + claudeCodeEligible, fail-closed on unknown. Composed
+    // before appendCcDiscoveryAliases runs, so a rejected model never gets a
+    // claude/… mirror allocated in the first place. See
+    // claudeGatewayVisibility.ts's docblock.
     finalModels = appendCcDiscoveryAliases(
       finalModels,
-      buildCcAliasPredicate({
-        global: ccAliasGlobal,
-        providers: ccAliasSettings.providers,
-        models: ccAliasSettings.models,
-      })
+      withClaudeGatewayCapabilityGate(
+        buildCcAliasPredicate({
+          global: ccAliasGlobal,
+          providers: ccAliasSettings.providers,
+          models: ccAliasSettings.models,
+        })
+      )
     );
   }
 
