@@ -24,9 +24,11 @@
 import { getCachedProviderConnectionById } from "@/lib/db/readCache";
 import { classify429, type FailureKind } from "@/shared/utils/classify429";
 import { getCircuitBreaker, type CircuitBreakerStatus } from "@/shared/utils/circuitBreaker";
+import { extractProviderModelInfo } from "@omniroute/open-sse/config/providers/directCapabilities.ts";
 import { grantsRecurringFreeAccess } from "@omniroute/open-sse/config/freeModelCatalog.ts";
 
 import { getModelLockoutInfo } from "./accountFallback";
+import { produceCapabilities } from "./capabilityEligibility";
 import {
   classifyConnectionBilling,
   type ConnectionBillingVerdict,
@@ -302,25 +304,17 @@ function classifyCostClass(
 // Capabilities Classification (fail-closed)
 // ---------------------------------------------------------------------------
 
-function classifyCapabilities(overrides?: Partial<ProviderCapabilities>): ProviderCapabilities {
-  // Start with all null (unknown/not-tested)
-  const caps: ProviderCapabilities = {
-    executable: null,
-    fastEligible: null,
-    codingEligible: null,
-    genericToolEligible: null,
-    claudeCodeEligible: null,
-    supervisorEligible: null,
-  };
-
-  // Apply overrides if provided
-  if (overrides) {
-    Object.assign(caps, overrides);
-  }
-
-  // Fail-closed: null means unknown, which means not eligible
-  // Consumers must explicitly check for true, not just !false
-  return caps;
+/**
+ * Merge explicit overrides over the D2-produced eligibility verdicts. The
+ * producer verdicts are independent dimensions; an override wins per field.
+ * null means unknown (not eligible); a proven `false` is a verdict, distinct
+ * from unknown.
+ */
+function classifyCapabilities(
+  base: ProviderCapabilities,
+  overrides?: Partial<ProviderCapabilities>
+): ProviderCapabilities {
+  return overrides ? { ...base, ...overrides } : { ...base };
 }
 
 // ---------------------------------------------------------------------------
@@ -510,7 +504,13 @@ export async function getProviderRuntimeState(
 
   const costClass = classifyCostClass(billingVerdict, provider, model);
 
-  const capabilities = classifyCapabilities(options?.capabilities);
+  // D1 → D2: extract the direct-provider capability metadata for this
+  // (provider, model) and produce the eligibility verdicts. Explicit overrides
+  // still win per field.
+  const capabilities = classifyCapabilities(
+    produceCapabilities(extractProviderModelInfo(provider, model)),
+    options?.capabilities
+  );
 
   const lastSuccessAt = lastUsedAt ? new Date(lastUsedAt).getTime() : null;
   const lastFailureAt = lastErrorAt ? new Date(lastErrorAt).getTime() : null;

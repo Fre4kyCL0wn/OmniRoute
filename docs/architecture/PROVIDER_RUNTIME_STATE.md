@@ -4,6 +4,11 @@
 
 - **O9-F3.3C — Free benchmark work**: **COMPLETE / COMMITTED / PUSHED** — checkpoint `8701227e8123103b98c8552e019494cb27f6aebb`
 - **O9-F3.3P0 — Provider State Foundation**: **COMPLETE / VALIDATED**
+- **O9-F3.3P1-D1 — Direct Provider Capability Metadata**: **COMPLETE**
+- **O9-F3.3P1-D2 — Capability → Eligibility Producer**: **COMPLETE**
+- **O9-F3.3P1-D0 — FCC Preferred Catalog Integration Foundation**: **COMPLETE (this change)** —
+  evidence-source abstraction + provider/model mapping + ranking signal + sync design;
+  fixture-only, not wired into live routing (see below)
 
 O9-F3.3P0 builds the foundation for a future direct, independent free / free-tier
 provider pool. Planned later: Groq, Cerebras, Gemini / Google AI Studio, NVIDIA NIM.
@@ -196,6 +201,177 @@ Supports both `Headers` objects and plain records.
   provider rule treats it as RPD. If RPM `remaining=0` is observed in shadow logs,
   the rule should be refined with the actual body text.
 
+## Direct Provider Capability Metadata (O9-F3.3P1-D1)
+
+The direct-free-provider pool needs normalized per-(provider, model) capability
+metadata — the raw facts the eligibility producer (D2) derives `executable`,
+`fastEligible`, `codingEligible`, `genericToolEligible`, `claudeCodeEligible`
+and `supervisorEligible` from. `ProviderModelInfo` is the O9-F3.3 name for that
+record (echoing the free-claude-code `ProviderModelInfo` reference audited in
+O9-F3.3R1).
+
+Module: `open-sse/config/providers/directCapabilities.ts` — `ProviderModelInfo`
+type + `extractProviderModelInfo(provider, model, enriched?)`, a **DB-free,
+deterministic, pure** extraction. No SQLite, no synced cache, no timer/process.
+
+**Layer precedence** (first proven value wins):
+
+1. `enriched` — OPTIONAL runtime/synced capability layer (e.g. the full
+   `ResolvedModelCapabilities` from `getResolvedModelCapabilities`, merged
+   upstream by the D2 producer). Deferred to the caller so this module stays
+   pure and unit-testable without a SQLite driver.
+2. Static base — provider `RegistryModel` (registry `toolCalling` /
+   `supportsReasoning` / `supportsVision` / `contextLength` / `maxOutputTokens`)
+   then static `ModelSpec` (`MODEL_SPECS`) for the model id (or its leaf, for
+   path-shaped ids). This is the DB-free subset of the canonical resolver chain.
+3. Curated judgement — `DIRECT_PROVIDER_JUDGEMENTS`
+   (`directCapabilities.data.ts`): hand-set facts no source derives, each with
+   an `// evidence:` citation (public-page | in-repo), following the
+   `freeModelCatalog.data.ts` convention. Provider-wide `"*"` defaults merge
+   under per-model entries (per-model wins field-by-field).
+
+**Contract** (mirrors the runtime-state invariants):
+
+- Every capability field is an INDEPENDENT dimension — none infers another.
+- Unknown / unproven stays `null`; `null` means "not eligible" to consumers.
+- No optimistic TRUE assumptions: a field is `true` only when a layer proves it.
+- A curated `supportsReasoning: false` (e.g. Groq's llama-4-scout) is a proven
+  FALSE, distinct from `null` (unknown).
+
+**Pool**: `DIRECT_CAPABILITY_PROVIDERS` = `groq`, `cerebras` (P1) + `gemini`,
+`nvidia` (P2 roadmap). The seed curates only facts defensible today: Groq's
+`latencyClass: "fast"` (public positioning) and the `codingClass: "coding"`
+gpt-oss family on groq/cerebras. `strengthClass` and `claudeCodeReady` are left
+null until a P1 research pass / the Claude Code gateway work (D3) prove them.
+
+D2 (capability → eligibility producer) consumes `ProviderModelInfo` and fills
+the previously all-`null` `ProviderRuntimeState.capabilities` block.
+
+Provider-wide `"*"` judgement defaults are scoped to models the provider
+actually serves (registry model or a `passthroughModels` provider) — never to
+an arbitrary `groq/<unknown-id>` prefix. See the `fix(o9)` commit "scope
+provider-wide judgement defaults to served models".
+
+## Capability → Eligibility Producer (O9-F3.3P1-D2)
+
+`produceCapabilities(info: ProviderModelInfo)` (`open-sse/services/capabilityEligibility.ts`)
+maps the D1 fact layer onto the six independent eligibility verdicts consumed
+by `ProviderRuntimeState.capabilities` (no longer all-`null`). Pure, DB-free,
+deterministic.
+
+| Eligibility           | Proven by                                      | `true`                               | `false` (proven negative)          | `null`                |
+| --------------------- | ---------------------------------------------- | ------------------------------------ | ---------------------------------- | --------------------- |
+| `executable`          | provider registry (served model / passthrough) | entry has format+executor AND serves | catalog provider, model NOT served | unregistered provider |
+| `fastEligible`        | `latencyClass` (curated)                       | `"fast"`                             | `"standard"`                       | unproven              |
+| `codingEligible`      | `codingClass` (curated)                        | `"coding"`                           | `"general"` / `"weak"`             | unproven              |
+| `genericToolEligible` | `toolCalling` (extracted/enriched)             | `true`                               | `false`                            | unproven              |
+| `claudeCodeEligible`  | `claudeCodeReady` (curated)                    | `true`                               | `false`                            | unproven              |
+| `supervisorEligible`  | `strengthClass` (curated)                      | `"frontier"`                         | `"mid"` / `"light"`                | unproven              |
+
+**Semantics**: `true` = proven; `false` = proven negative (a VERDICT, distinct
+from unknown); `null` = unknown → not eligible. No cross-field inference — each
+dimension is proven by exactly one fact. `executable` is the only field resolved
+from the provider REGISTRY (not the model facts): Groq is catalog-validated with
+no passthrough, so an unlisted model (e.g. `llama-3.1-8b`) is a proven `false`.
+
+**Wiring**: `getProviderRuntimeState` now derives capabilities through
+D1 → D2 by default; explicit `options.capabilities` overrides win per field.
+`classifyCapabilities` became a pure `{...produced, ...overrides}` merge.
+
+Currently `claudeCodeEligible` and `supervisorEligible` resolve `null` for every
+direct provider (their curated proofs — `claudeCodeReady`, `strengthClass` — are
+unseeded). That is deliberate fail-closed: D3 (Claude Code gateway catalog) and
+the P1 research pass will prove them per provider/model.
+
+## FCC External Reference Integration (O9-F3.3P1-D0)
+
+[Free Claude Code (FCC)](https://github.com/Alishahryar1/free-claude-code) is integrated as a
+**preferred external evidence source for coding-agent / harness compatibility metadata**.
+
+**FCC is NOT:**
+
+- a runtime routing authority — OmniRoute stays the sole execution layer (`Client → Jarvis/OmniRoute
+→ Provider`; FCC is never inserted before or after OmniRoute in the request path)
+- a cost authority — FCC evidence can never turn a trial into recurring-free, or a paid model into free
+- a quota authority — FCC evidence can never override an exhausted-quota verdict
+- a health authority — FCC evidence can never override circuit-breaker / connection-cooldown state
+
+**What FCC IS**: a catalog/compatibility evidence source for the six independent dimensions FCC can
+speak to (see `FccModelEvidence` in `open-sse/config/providers/fccCatalog.ts`): context window, max
+output tokens, input/output modalities, tool/reasoning/structured-output support, aliases, and —
+its most valuable contribution — per-coding-client compatibility evidence (Claude Code, Codex,
+OpenCode).
+
+### Source priority per dimension
+
+`open-sse/services/evidenceSource.ts` defines a generic `resolveBySourcePriority` over six named
+`EvidenceSource`s (`omniroute_registry`, `provider_discovery`, `models_dev`, `fcc_catalog`,
+`shadow_validation`, `manual_verified`). A source that is not in a dimension's priority list can
+**never** win for that dimension, by construction:
+
+| Dimension                     | Priority (highest → lowest)                                                                            |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Coding-agent / harness compat | `shadow_validation` → `fcc_catalog` → `models_dev` → `omniroute_registry`                              |
+| Cost / free regime            | `manual_verified` → `shadow_validation` → `omniroute_registry` (`fcc_catalog` absent — cannot resolve) |
+
+### Provider / model mapping
+
+`fccCatalog.ts::mapFccProvider(fccProviderId)` normalizes an FCC provider id onto the Jarvis/
+OmniRoute registry id via one of four verdicts:
+
+- `mapped` — FCC id equals the Jarvis registry id directly (e.g. `groq`, `cerebras`, `gemini`, `nvidia`)
+- `alias` — `FCC_PROVIDER_ID_MAP` names a different, valid Jarvis id (e.g. FCC `cloudflare` → Jarvis
+  `cloudflare-ai`)
+- `conflict` — the alias table names a Jarvis id that does not resolve (misconfiguration — surfaced,
+  never silently ignored; `findBrokenFccProviderAliases()` is a standing self-check)
+- `fcc_only` — no Jarvis registry entry exists under either spelling (e.g. `targon` today). The
+  provider/model MAY surface in an FCC-evidence view, but `resolveFccOnlyExecutable()` always returns
+  `false`, matching the real D1/D2 pipeline's own `executable: null` for an unregistered provider —
+  both agree the model is NOT executable until a real registry entry / executor / translator exists.
+
+`fccCatalog.ts::canonicalizeFccModelId(providerId, modelId)` normalizes FCC model ids onto the
+`provider/model` path shape the Jarvis registry already uses (trims whitespace, collapses an
+accidental `provider/provider/model` duplication).
+
+### Ranking signal (not yet wired into live routing)
+
+`open-sse/services/fccRankingSignal.ts::computeFccRankingSignal(evidence, gate)` produces
+`{ fccKnown, fccClaudeCodeCompatible, fccCodexCompatible, fccOpenCodeCompatible, applies }`.
+`applies` is `true` **only** when `gate.executable === true` AND the route's own eligibility flag
+(`genericToolEligible` / `codingEligible` / `claudeCodeEligible` / …) is already `true` — quota/
+health/cost policy is computed entirely upstream and is not even representable as an input to this
+function (`FccRankingGate` carries no health/quota/cost fields). This is a hard `if (fccKnown)
+chooseFirst()` anti-pattern is explicitly rejected — FCC can only ever add a soft signal on top of
+an already-passed hard gate.
+
+**This signal is not yet wired into `open-sse/services/combo.ts` scoring** — D0 ships the pure,
+tested function; wiring it into live Auto-Combo ranking is a follow-up phase pending review.
+
+### Dynamic sync design (fixture-only in D0/P1)
+
+`open-sse/services/fccSync.ts` defines the shape a future ingestion job will use:
+`FCC upstream snapshot/ref → normalizer → diffFccSnapshots() → review → Jarvis external catalog
+cache → validation → registry evidence`. `diffFccSnapshots()` is pure and **never deletes anything
+itself** — it only reports `added` / `removed` / `renamed` / `providerMismatch` for a caller to act
+on (fail-closed, no destructive auto-deletes). `isSnapshotStale()` fails closed on an unparseable
+timestamp.
+
+**D0 does not add a live GitHub dependency.** `open-sse/config/providers/fccCatalog.data.ts` is a
+small, explicitly-labeled **fixture** (`FCC_CATALOG_SOURCE_REVISION = "fixture-v0-illustrative"`) —
+its entries are illustrative, not a synced copy of FCC's actual catalog. A later phase replaces the
+fixture with a real snapshot without changing `fccCatalog.ts`'s shape.
+
+### Explicitly out of scope for D0
+
+Per the O9-F3.3P1-D0 spec, none of the following are built in this phase (deliberately deferred):
+
+- an execution path through FCC (`Jarvis → FCC → Provider`, or any variant) — execution stays
+  `Client → Jarvis/OmniRoute → Provider`
+- wiring the ranking signal into `combo.ts` live scoring
+- a full copy of FCC's model catalog (30+ providers) — only the mapping mechanism + a 3-entry
+  illustrative fixture exist today
+- a live GitHub fetch / sync job — `fccSync.ts` is the designed shape, not yet invoked by anything
+
 ## Candidate Suppression
 
 The earlier `suppressExhaustedFreeCandidates()` was misleading (it surfaced only a single
@@ -240,9 +416,17 @@ outside this connection-scoped special case are unchanged (#1731 regression-guar
 - **F3.3P1-A**: Groq + Cerebras architecture audit — **COMPLETE** (both already fully wired as
   `format:"openai"` / `executor:"default"` apikey providers; no new transport needed)
 - **F3.3P1-C1**: Free regime semantics — trial != recurring free — **COMPLETE** (this change)
-- **F3.3P1-C2**: Groq quota/error/runtime-state semantics — **COMPLETE (this change)**
-- **F3.3P1** (remaining C2..F): capability producer, verified-free discovery, credential wiring,
-  controlled shadow validation — **NOT STARTED**
+- **F3.3P1-C2**: Groq quota/error/runtime-state semantics — **COMPLETE**
+- **F3.3P1-D1**: Direct Provider Capability Metadata (`ProviderModelInfo` + pure
+  extraction) — **COMPLETE**
+- **F3.3P1-D2**: Capability → Eligibility Producer (`executable`, `fastEligible`,
+  `codingEligible`, `genericToolEligible`, `claudeCodeEligible`, `supervisorEligible`) — **COMPLETE**
+- **F3.3P1-D0**: FCC Preferred Catalog Integration Foundation (evidence-source priority,
+  provider/model mapping, ranking signal, sync design) — **COMPLETE (this change)**; fixture-only,
+  ranking signal not yet wired into `combo.ts`
+- **F3.3P1-D3**: Native Claude Code Gateway Catalog (dynamic Jarvis model discovery) — **NOT STARTED**
+- **F3.3P1** (remaining): verified-free discovery, credential wiring, controlled
+  shadow validation — **NOT STARTED**
 - **F3.3P2**: Gemini + NVIDIA direct — **NOT STARTED**
 - **After**: Credential Broker
 

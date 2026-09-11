@@ -436,7 +436,7 @@ describe("Provider Runtime State", () => {
   });
 
   describe("Test 10: Capability states stay independent, unknown=null", () => {
-    it("should return null for all capabilities when not provided", async () => {
+    it("produces fail-closed capabilities; only unproven fields stay null", async () => {
       const { getProviderRuntimeState } =
         await import("../../open-sse/services/providerRuntimeState.ts");
       const state = await getProviderRuntimeState("groq", "conn-10", "llama-3.1-8b", {
@@ -449,7 +449,9 @@ describe("Provider Runtime State", () => {
         },
       });
 
-      assert.equal(state.capabilities.executable, null);
+      // Groq is catalog-validated (no passthrough) and does not serve
+      // llama-3.1-8b → NOT executable (proven false, not unknown).
+      assert.equal(state.capabilities.executable, false);
       assert.equal(state.capabilities.fastEligible, null);
       assert.equal(state.capabilities.codingEligible, null);
       assert.equal(state.capabilities.genericToolEligible, null);
@@ -494,7 +496,7 @@ describe("Provider Runtime State", () => {
       });
 
       assert.equal(state.capabilities.supervisorEligible, true);
-      assert.equal(state.capabilities.executable, null);
+      assert.equal(state.capabilities.executable, false); // producer verdict, not inferred
       assert.equal(state.capabilities.fastEligible, null);
       assert.equal(state.capabilities.codingEligible, null);
       assert.equal(state.capabilities.genericToolEligible, null);
