@@ -11,11 +11,16 @@
 - **O9-F3.3P1-D3 — FCC Upstream Catalog Snapshot & Sync**: **COMPLETE** — real,
   pinned-revision, importer-generated provider snapshot (50 providers) + hand-curated discovery
   classification + provider-level diff workflow; still not wired into live routing
-- **O9-F3.3P1-D4 — Native Claude Code Gateway Visibility**: **COMPLETE (this change, pending
-  review)** — re-scoped after audit found the gateway mirror already exists; adds only a
-  capability-aware visibility gate (executable + claudeCodeEligible, fail-closed) composed onto
-  the existing `claude/…` / `no-think/…` mirrors. No new gateway-id system, no FCC prefix
-  adopted, no `/v1/models` shape change with flags off (see below)
+- **O9-F3.3P1-D4 — Native Claude Code Gateway Visibility**: **COMPLETE** — re-scoped after audit
+  found the gateway mirror already exists; adds only a capability-aware visibility gate
+  (executable + claudeCodeEligible, fail-closed) composed onto the existing `claude/…` /
+  `no-think/…` mirrors. No new gateway-id system, no FCC prefix adopted, no `/v1/models` shape
+  change with flags off
+- **O9-F3.3P1-D4.1 — Claude Code Compatibility Evidence, Tranche 1**: **COMPLETE (this change,
+  pending review)** — seeds real, per-model `claudeCodeReady` evidence for Gemini (7 true) and
+  NVIDIA (3 true, 1 false); Groq/Cerebras/OpenRouter stay unseeded (no sufficient per-model
+  evidence found — not a defect). D4's gate logic untouched. Visibility: 0 → 10 models (see
+  below)
 
 O9-F3.3P0 builds the foundation for a future direct, independent free / free-tier
 provider pool. Planned later: Groq, Cerebras, Gemini / Google AI Studio, NVIDIA NIM.
@@ -555,6 +560,79 @@ scoring is **D5**; actually starting Claude Code, setting `ANTHROPIC_BASE_URL` /
 ships the gate off-by-default alongside the (already off-by-default) mirrors it composes with —
 no behavior changes for any deployment that hasn't already opted into the mirror flags.
 
+## D4.1 Claude Code Compatibility Evidence (O9-F3.3P1-D4.1, Tranche 1)
+
+D4's visibility gate measured 0/2685 registry models visible — correct and fail-closed, but
+useless without real evidence behind `claudeCodeReady`. D4.1 seeds a first, narrow, fully-cited
+tranche of that evidence into `directCapabilities.data.ts`'s `DIRECT_PROVIDER_JUDGEMENTS` — **the
+gate's own logic was never touched or loosened.**
+
+### Compatibility contract (derived from existing code, not invented)
+
+"Claude Code compatible via OmniRoute" is **not** about
+`open-sse/services/claudeCodeCompatible.ts` — that module is an unrelated wire-image relay bridge
+for third-party gateways mimicking the exact official Claude Code client (Stainless headers,
+request signing); it gates on an `anthropic-compatible-cc-*` provider prefix / `usesCcWireImage()`
+opt-in and none of Groq/Gemini/NVIDIA/Cerebras are that. The real contract is: `Claude Code
+request (Anthropic Messages shape) → OmniRoute Anthropic ingress → translator → provider →
+tool/streaming/response roundtrip → Claude Code` must hold. Traced and confirmed generic (not
+per-provider) for every `format:"openai"` provider via
+`open-sse/translator/request/claude-to-openai.ts` /
+`open-sse/translator/response/openai-to-claude.ts`, and for `format:"gemini"` via the
+`claude-to-gemini.ts` / `gemini-to-claude.ts` pair — both proven by existing, real (non-mocked)
+regression tests (`tests/unit/nvidia-tool-compatibility-2840.test.ts`,
+`anthropic-toolcall-args-6459.test.ts`, `translator-tool-call-shim.test.ts`,
+`translator-resp-openai-to-claude.test.ts`). Reasoning/thinking is confirmed **not** a
+prerequisite — the translator handles it as optional throughout.
+
+**Minimal evidence bar for `claudeCodeReady: true`**: a per-model `toolCalling` fact must already
+be proven (`RegistryModel.toolCalling` or static `ModelSpec.supportsTools`) AND the provider
+routes through one of the two generically-tested translator pairs above AND no known fatal
+incompatibility exists for that model. **`false`** requires an actual proven negative
+(`toolCalling: false`) — never merely-missing evidence. Everything else stays `null`.
+
+### Evidence sources used (and one explicitly rejected)
+
+Per the established D0 priority (`shadow_validation > existing OmniRoute tests > FCC model
+evidence > models.dev > registry/static facts`): no `shadow_validation` data exists yet;
+`models.dev` is confirmed to not exist as a real integration in this codebase (grep-verified —
+only a placeholder `EvidenceSource` enum value); the existing translator regression tests prove
+the _mechanism_; the registry/static-fact layer supplies the _per-model_ tool-calling proof.
+**FCC provider presence alone was explicitly rejected as insufficient**: FCC needing no
+Groq/Gemini/Cerebras-specific tool-calling workaround in its own code is provider-level
+circumstantial evidence, not a per-model proof — never the sole basis for an entry here (matches
+the D0/D3 invariant that FCC presence never grants eligibility on its own).
+
+### Tranche 1 result
+
+| Provider   | Models considered                                                 | `claudeCodeReady: true`                                                                                                                           | `claudeCodeReady: false`                                                       | Unseeded (null)                                                                                                                                    |
+| ---------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gemini     | 8                                                                 | **7** (all chat models with registry `toolCalling: true`)                                                                                         | 0                                                                              | 1 (TTS-only model, no tool-calling fact)                                                                                                           |
+| NVIDIA     | 12                                                                | **3** (static `ModelSpec.supportsTools: true` for `moonshotai/kimi-k3`, `deepseek-ai/deepseek-v4-pro-0813`, `deepseek-ai/deepseek-v4-flash-0731`) | **1** (`openai/gpt-oss-120b`, registry `toolCalling: false` — proven negative) | 8                                                                                                                                                  |
+| Groq       | 10                                                                | 0                                                                                                                                                 | 0                                                                              | **10** — zero per-model tool-calling facts exist anywhere in the registry or static-spec layer for any Groq model today                            |
+| Cerebras   | 3                                                                 | 0                                                                                                                                                 | 0                                                                              | **3** — same reason; optional per Schritt 12, evidence insufficient                                                                                |
+| OpenRouter | 1 (`auto`, static registry only — real catalog is dynamic/synced) | 0                                                                                                                                                 | 0                                                                              | 1 — no per-model discovery evidence is wired into D1 for OpenRouter's dynamic catalog today; deferred to D5/D6, **no blanket `openrouter → true`** |
+
+**Groq/Cerebras are not a defect** — this is the honest outcome of a real evidence search, not a
+gap in D4.1's effort. No provider-wide `"*"` inheritance was used for `claudeCodeReady` anywhere
+(unlike Groq's pre-existing `latencyClass` `"*"` default, a different field seeded in D0/D1).
+
+### Visibility impact (same audit methodology as D4's, re-run after seeding)
+
+|                                                                      | Before D4.1 | After D4.1 |
+| -------------------------------------------------------------------- | ----------- | ---------- |
+| `claudeCodeEligible = true`                                          | 0           | **10**     |
+| `claudeCodeEligible = false`                                         | 0           | **1**      |
+| `claudeCodeEligible = null`                                          | 2685        | 2674       |
+| Normal `claude/…` aliases visible (flags simulated ON)               | 0           | **10**     |
+| No-think `no-think/…` aliases visible (capability-gate contribution) | 0           | **10**     |
+
+Provider presence (executable=true for 2685/2685 models throughout, unchanged) never explains any
+of this — the entire delta is exactly the 10 seeded `true` verdicts. Technical Claude-Code
+compatibility remains completely independent of cost/free classification throughout: Cerebras's
+recurring-daily trial status (O9-F3.3P1-C1) and Groq's quota semantics (O9-F3.3P1-C2) were not
+read, referenced, or altered by any part of this evidence layer.
+
 ## Candidate Suppression
 
 The earlier `suppressExhaustedFreeCandidates()` was misleading (it surfaced only a single
@@ -611,9 +689,10 @@ outside this connection-scoped special case are unchanged (#1731 regression-guar
   discovery classification, provider-level diff, last-known-good validation) — **COMPLETE**;
   snapshot/diff not yet wired into live routing
 - **F3.3P1-D4**: Native Claude Code Gateway Visibility (capability-aware gate composed onto the
-  existing `claude/…` / `no-think/…` mirrors — no new gateway-id system) — **COMPLETE (this
-  change, pending review)**; `claudeCodeReady` still unseeded, so the gate currently advertises
-  nothing new until a research pass proves specific provider/model pairs
+  existing `claude/…` / `no-think/…` mirrors — no new gateway-id system) — **COMPLETE**
+- **F3.3P1-D4.1**: Claude Code Compatibility Evidence, Tranche 1 (Gemini 7 true, NVIDIA 3 true +
+  1 false; Groq/Cerebras/OpenRouter unseeded — insufficient per-model evidence) — **COMPLETE
+  (this change, pending review)**; 10 models now visible via the D4 gate, up from 0
 - **F3.3P1-D5**: FCC ranking / preferred-candidate selection wiring into `combo.ts` live scoring —
   **NOT STARTED**
 - **F3.3P1-D6**: Controlled Shadow activation (Claude Code launch, `ANTHROPIC_BASE_URL` /
