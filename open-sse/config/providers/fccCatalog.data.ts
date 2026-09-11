@@ -31,12 +31,31 @@ export const FCC_CATALOG_STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 /**
  * FCC provider id → Jarvis/OmniRoute registry id, for the cases where they
  * differ. Providers whose FCC id already equals the Jarvis registry id
- * (groq, cerebras, gemini, nvidia, mistral, deepseek, kimi, huggingface,
- * sambanova, deepinfra, siliconflow, openrouter, …) need no entry here —
- * `mapFccProvider` resolves them directly.
+ * (groq, cerebras, gemini, mistral, deepseek, kimi, huggingface, sambanova,
+ * deepinfra, siliconflow, together, nebius, chutes, openai, …) need no entry
+ * here — `mapFccProvider` resolves them directly.
+ *
+ * The three entries below were added in O9-F3.3P1-D3 after cross-checking the
+ * REAL FCC provider catalog (pinned revision
+ * `81fa340ecac5ce1ae8ba4ea60e7a5517224bfaee`,
+ * `src/free_claude_code/config/provider_catalog.py`) against the current
+ * OmniRoute registry — FCC uses Python-identifier-style ids for these three
+ * where OmniRoute uses a shorter/different registry id:
  */
 export const FCC_PROVIDER_ID_MAP: Record<string, string> = {
   cloudflare: "cloudflare-ai",
+  // evidence: FCC provider_catalog.py key "nvidia_nim" (display_name "NVIDIA
+  // NIM"); OmniRoute's registry entry for this provider is keyed "nvidia"
+  // (open-sse/config/providers/registry/nvidia/index.ts).
+  nvidia_nim: "nvidia",
+  // evidence: FCC provider_catalog.py key "open_router" (display_name
+  // "OpenRouter"); OmniRoute's registry entry is keyed "openrouter"
+  // (open-sse/config/providers/registry/openrouter/index.ts).
+  open_router: "openrouter",
+  // evidence: FCC provider_catalog.py key "github_copilot"
+  // (auth_kind=CONNECTED_ACCOUNT, display_name "GitHub Copilot"); OmniRoute's
+  // registry entry is keyed "github" (open-sse/config/providers/registry/github/index.ts).
+  github_copilot: "github",
 };
 
 const NO_CLIENT_EVIDENCE = { compatible: null, evidenceNote: null } as const;

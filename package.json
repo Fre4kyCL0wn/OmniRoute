@@ -104,6 +104,7 @@
     "eval:router:search": "node --import tsx scripts/router-eval/search.ts",
     "eval:router:trends": "node --import tsx scripts/router-eval/trends.ts",
     "release:sync-changelog-i18n": "node scripts/release/sync-changelog-i18n.mjs",
+    "o9:fcc:sync": "node scripts/ad-hoc/fcc-catalog-sync.mjs",
     "prebuild": "npm run check:native-deps",
     "build": "node scripts/build/build-next-isolated.mjs",
     "build:secure": "OMNIROUTE_BUILD_PROFILE=minimal node scripts/build/build-next-isolated.mjs",

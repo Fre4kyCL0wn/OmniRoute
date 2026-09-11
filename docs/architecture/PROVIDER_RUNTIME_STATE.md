@@ -6,9 +6,11 @@
 - **O9-F3.3P0 — Provider State Foundation**: **COMPLETE / VALIDATED**
 - **O9-F3.3P1-D1 — Direct Provider Capability Metadata**: **COMPLETE**
 - **O9-F3.3P1-D2 — Capability → Eligibility Producer**: **COMPLETE**
-- **O9-F3.3P1-D0 — FCC Preferred Catalog Integration Foundation**: **COMPLETE (this change)** —
-  evidence-source abstraction + provider/model mapping + ranking signal + sync design;
-  fixture-only, not wired into live routing (see below)
+- **O9-F3.3P1-D0 — FCC Preferred Catalog Integration Foundation**: **COMPLETE** —
+  evidence-source abstraction + provider/model mapping + ranking signal + sync design
+- **O9-F3.3P1-D3 — FCC Upstream Catalog Snapshot & Sync**: **COMPLETE (this change)** — real,
+  pinned-revision, importer-generated provider snapshot (50 providers) + hand-curated discovery
+  classification + provider-level diff workflow; still not wired into live routing (see below)
 
 O9-F3.3P0 builds the foundation for a future direct, independent free / free-tier
 provider pool. Planned later: Groq, Cerebras, Gemini / Google AI Studio, NVIDIA NIM.
@@ -369,8 +371,109 @@ Per the O9-F3.3P1-D0 spec, none of the following are built in this phase (delibe
   `Client → Jarvis/OmniRoute → Provider`
 - wiring the ranking signal into `combo.ts` live scoring
 - a full copy of FCC's model catalog (30+ providers) — only the mapping mechanism + a 3-entry
-  illustrative fixture exist today
-- a live GitHub fetch / sync job — `fccSync.ts` is the designed shape, not yet invoked by anything
+  illustrative fixture exist today (superseded for the PROVIDER catalog by the real D3 snapshot
+  below; FCC still has no per-model capability catalog to import — see D3)
+- a live GitHub fetch / sync job — D3 adds an OFFLINE importer over a manually-checked-out FCC
+  revision (see below); nothing in Jarvis fetches from GitHub at runtime
+
+## D3 FCC Upstream Catalog Snapshot (O9-F3.3P1-D3)
+
+D3 replaces D0's "no real snapshot yet" state with a real, versioned, reproducible import of
+FCC's **provider** catalog — while keeping D0's illustrative per-model fixture
+(`fccCatalog.data.ts`'s `FCC_CATALOG_FIXTURE`) untouched, since FCC has essentially no real
+per-model capability data to import (see next section).
+
+### Critical architecture fact: FCC's provider catalog ≠ FCC's model catalog
+
+`PROVIDER_CATALOG` (`free_claude_code.config.provider_catalog`) is a **static** dict of 50
+`ProviderDescriptor` records — connection metadata only: id, display name, auth kind, default
+base URL, credential env-var name, credential signup URL. It carries **no model ids and no
+capability facts**.
+
+Verified by reading (not executing) FCC's actual provider-construction code at the pinned
+revision: `providers/runtime/factory.py::create_provider()` dispatches every provider id to
+exactly one of a dedicated module, the generic `OPENAI_CHAT_PROFILES` OpenAI-compatible adapter,
+or a connected-account factory. **Every single path ends in an async `list_model_infos()` that
+performs a LIVE HTTP call** (to the provider's `/models` endpoint, a local server for
+`local: true` providers, or a connected-account's own live listing) — there is no provider in
+this FCC revision whose full model list ships as a bundled static array. Jarvis therefore does
+**not** claim FCC has a static, complete model list — it discovers models itself, dynamically,
+exactly like Jarvis does.
+
+The two exceptions found while auditing every construction path: `azure_openai` sets
+`model_ids_are_routable=False` (deployment names are user-configured, never discovered —
+`NO_MODEL_DISCOVERY`), and `llm7`'s profile merges 3 fixed `additional_model_ids` on top of its
+live `/models` response (`HYBRID`). Neither is a real "static model catalog" in the sense of
+shipping actual per-model capability facts.
+
+**Jarvis imports**: provider connection metadata (below) + discovery-capability metadata
+(hand-curated, evidence-cited per provider — see `fccModelDiscoveryClassification.data.ts`).
+**Jarvis does NOT import**: a model list, because FCC itself does not have one to give — dynamic
+model enumeration for any given provider remains entirely Jarvis/OmniRoute's own responsibility
+(via the provider's `models:` registry array or, for the 9 providers where OmniRoute has one, its
+own `modelsUrl` live discovery), same as before D3.
+
+### Snapshot format
+
+`open-sse/config/providers/fccProviderSnapshot.data.ts` — **AUTO-GENERATED, DO NOT EDIT** — pure
+data, no FCC code copied. Carries `FCC_SNAPSHOT_SCHEMA_VERSION`, `FCC_SNAPSHOT_SOURCE_REPO`,
+`FCC_SNAPSHOT_SOURCE_REVISION` (full 40-char git SHA), `FCC_SNAPSHOT_GENERATED_AT` (real ISO
+timestamp of the import run), and `FCC_PROVIDER_SNAPSHOT: FccProviderSnapshotEntry[]`. No
+credential VALUES are ever read or stored — `credentialEnv` is the upstream env-var **name** only
+(e.g. `"GROQ_API_KEY"`); Jarvis's own credential infrastructure is unaffected regardless.
+
+Pinned revision for this snapshot: `81fa340ecac5ce1ae8ba4ea60e7a5517224bfaee`
+(`github.com/Alishahryar1/free-claude-code`).
+
+### Importer
+
+`scripts/ad-hoc/fcc-catalog-sync.mjs` (`npm run o9:fcc:sync -- --source <path> --revision <sha>`)
+reads a LOCAL, already-checked-out FCC directory as plain text — **no network calls in the parser
+itself**, no `eval`, no dynamic `import()` of FCC code, no Python execution. It is a narrow parser
+purpose-built for the documented `ProviderDescriptor` dataclass shape (not a generic Python
+expression evaluator): every field value it does not recognize aborts the entire import
+(non-zero exit) rather than guessing. A raw-occurrence cross-check
+(`parsed count === grep-equivalent 'ProviderDescriptor(' count`) guards against silently
+mis-parsing entries. On ANY failure the existing committed snapshot file is left untouched
+(last-known-good) — an empty catalog is never treated as a successful import.
+
+### Discovery classification (hand-curated overlay)
+
+`open-sse/config/providers/fccModelDiscoveryClassification.data.ts` — same pattern as
+`directCapabilities.data.ts`'s curated judgement layer: per-provider
+`STATIC_MODEL_CATALOG | DYNAMIC_MODEL_DISCOVERY | HYBRID | NO_MODEL_DISCOVERY | UNKNOWN`, each
+entry citing the exact FCC source file/mechanism it was proven from. A provider with no entry is
+`UNKNOWN` — never guessed. This stays a hand-reviewed overlay rather than something the importer
+derives automatically, because classifying Python control flow (which base class, which override,
+which profile flag) is not something a narrow text parser should attempt — re-verify and update
+this file whenever the pinned revision changes.
+
+### Provider mapping additions
+
+Cross-checking the real FCC ids against the current OmniRoute registry (D0's mapping mechanism,
+unchanged) surfaced 3 real alias entries FCC's Python-identifier-style ids needed that the D0
+illustrative fixture had incorrectly assumed were direct matches: `nvidia_nim → nvidia`,
+`open_router → openrouter`, `github_copilot → github` (all added to `FCC_PROVIDER_ID_MAP` in
+`fccCatalog.data.ts` with evidence comments). Current coverage against the pinned revision: 50 FCC
+providers — 30 `mapped`, 4 `alias`, 16 `fcc_only`, 0 `conflict`; 34 are Jarvis-executable; 9 have a
+live OmniRoute `modelsUrl` (`jarvisDiscoverySupported`); 17 are FCC `DYNAMIC_MODEL_DISCOVERY`
+(verified), 1 `HYBRID`, 1 `NO_MODEL_DISCOVERY`, 31 `UNKNOWN` (unclassified — not guessed).
+
+### Diff workflow (Schritt 11) and last-known-good (Schritt 12)
+
+`open-sse/services/fccSync.ts::diffFccCatalogSnapshots()` reports `addedProviders`,
+`removedProviders`, `changedProviders`, `mappingChanges`, `discoveryChanges`,
+`addedStaticModels`/`removedStaticModels`/`changedStaticModels` (the last three over the D0
+per-model fixture shape). **Removed is never delete** — nothing in this module, or anywhere in
+D3, deletes a provider or model from any Jarvis registry; removals are reported for manual
+review only.
+
+`open-sse/config/providers/fccSnapshotValidation.ts::validateFccSnapshotForAdoption()` is the
+last-known-good gate a future ingestion job must pass before adopting a new snapshot: schema
+shape, a full 40-char `sourceRevision`, a parseable non-future `generatedAt`, no duplicate
+provider ids, and no provider that would resolve to a `conflict` mapping against the CURRENT
+registry. Any failure keeps the previously-adopted snapshot; an empty candidate is never accepted
+as valid.
 
 ## Candidate Suppression
 
@@ -422,9 +525,13 @@ outside this connection-scoped special case are unchanged (#1731 regression-guar
 - **F3.3P1-D2**: Capability → Eligibility Producer (`executable`, `fastEligible`,
   `codingEligible`, `genericToolEligible`, `claudeCodeEligible`, `supervisorEligible`) — **COMPLETE**
 - **F3.3P1-D0**: FCC Preferred Catalog Integration Foundation (evidence-source priority,
-  provider/model mapping, ranking signal, sync design) — **COMPLETE (this change)**; fixture-only,
-  ranking signal not yet wired into `combo.ts`
-- **F3.3P1-D3**: Native Claude Code Gateway Catalog (dynamic Jarvis model discovery) — **NOT STARTED**
+  provider/model mapping, ranking signal, sync design) — **COMPLETE**; ranking signal not yet
+  wired into `combo.ts`
+- **F3.3P1-D3**: FCC Upstream Catalog Snapshot & Sync (real pinned-revision provider snapshot,
+  discovery classification, provider-level diff, last-known-good validation) — **COMPLETE (this
+  change)**; snapshot/diff not yet wired into live routing
+- **F3.3P1-D4**: Native Claude Code Gateway Catalog (dynamic Jarvis model discovery) — **NOT
+  STARTED** — renumbered from D3 to D4 in this pass; see note below
 - **F3.3P1** (remaining): verified-free discovery, credential wiring, controlled
   shadow validation — **NOT STARTED**
 - **F3.3P2**: Gemini + NVIDIA direct — **NOT STARTED**
