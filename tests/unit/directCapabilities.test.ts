@@ -14,6 +14,7 @@ import {
   DIRECT_PROVIDER_JUDGEMENTS,
   extractProviderModelInfo,
   getDirectProviderJudgement,
+  resolveVerifiedFree,
 } from "../../open-sse/config/providers/directCapabilities.ts";
 
 // ── Curated judgement ───────────────────────────────────────────────────────
@@ -168,4 +169,39 @@ test("direct provider pool contains the P1/P2 roadmap providers", () => {
 
 test("curated-at marker is an ISO date", () => {
   assert.match(DIRECT_CAPABILITY_CURATED_AT, /^\d{4}-\d{2}-\d{2}$/);
+});
+
+// ── resolveVerifiedFree (O9-F3.4 P4-A — FREE_MODEL_BUDGETS evidence) ────────
+// Independent of the curated capability judgement above; NOT auto-charge-safe
+// by itself (hardStopGuaranteed / account billing safety is P4-B, still open).
+
+test("recurring freeTypes (daily, uncapped) resolve to true", () => {
+  assert.equal(resolveVerifiedFree("gemini", "gemini-3.1-flash-lite"), true); // recurring-uncapped
+  assert.equal(resolveVerifiedFree("groq", "openai/gpt-oss-120b"), true); // recurring-daily
+  assert.equal(resolveVerifiedFree("openrouter", "auto"), true); // recurring-daily
+});
+
+test("one-time-initial (trial credit) resolves to a proven FALSE, not null", () => {
+  assert.equal(resolveVerifiedFree("cerebras", "gpt-oss-120b"), false);
+  assert.equal(resolveVerifiedFree("nvidia", "google/gemma-4-31b-it"), false);
+});
+
+test("no catalog entry resolves to null (fail-closed, not guessed)", () => {
+  assert.equal(resolveVerifiedFree("gemini", "gemini-3.7-flash"), null); // paid/unclassified tier
+  assert.equal(resolveVerifiedFree("not-a-provider", "x"), null);
+});
+
+test("keyless and discontinued freeTypes stay null — deliberately not classified here", () => {
+  assert.equal(resolveVerifiedFree("opencode", "big-pickle"), null); // keyless
+  assert.equal(resolveVerifiedFree("pollinations", "gemini"), null); // discontinued
+});
+
+test("extractProviderModelInfo carries verifiedFree independently of curated judgement", () => {
+  const freeAndEligible = extractProviderModelInfo("gemini", "gemini-3.1-flash-lite");
+  assert.equal(freeAndEligible.verifiedFree, true);
+  assert.equal(freeAndEligible.claudeCodeReady, true); // both true, but independently sourced
+
+  const eligibleNotFree = extractProviderModelInfo("gemini", "gemini-3.7-flash");
+  assert.equal(eligibleNotFree.verifiedFree, null); // not in freeModelCatalog.data.ts
+  assert.equal(eligibleNotFree.claudeCodeReady, true); // D4.1-seeded regardless
 });

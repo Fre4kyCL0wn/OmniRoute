@@ -31,6 +31,10 @@ import {
   PROVIDER_ID_TO_ALIAS,
   PROVIDER_MODELS,
 } from "@omniroute/open-sse/config/providerModels.ts";
+import {
+  FREE_MODEL_BUDGETS,
+  type FreeModelFreeType,
+} from "@omniroute/open-sse/config/freeModelCatalog.ts";
 
 import { getRegistryEntry } from "../providerRegistry.ts";
 import { DIRECT_PROVIDER_JUDGEMENTS } from "./directCapabilities.data.ts";
@@ -95,6 +99,17 @@ export interface ProviderModelInfo {
   codingClass: DirectProviderJudgement["codingClass"];
   strengthClass: DirectProviderJudgement["strengthClass"];
   claudeCodeReady: DirectProviderJudgement["claudeCodeReady"];
+
+  /**
+   * Economic evidence (O9-F3.4 P4-A), sourced independently from the
+   * capability facts above — see `resolveVerifiedFree` for the exact
+   * fail-closed mapping from `FreeModelBudget.freeType`. NOT auto-charge-safe
+   * by itself: `hardStopGuaranteed` and account/connection billing safety
+   * (P4-B) are separate, still-unimplemented dimensions this field
+   * deliberately does not fold in. A model may be `verifiedFree: true` and
+   * still be unsafe for a strict zero-cost policy.
+   */
+  verifiedFree: boolean | null;
 }
 
 const NULL_JUDGEMENT: DirectProviderJudgement = {
@@ -209,6 +224,54 @@ export function getDirectProviderJudgement(
 }
 
 // ---------------------------------------------------------------------------
+// Verified-free lookup (O9-F3.4 P4-A — freeModelCatalog.data.ts evidence)
+// ---------------------------------------------------------------------------
+
+/**
+ * `freeType`s whose allowance genuinely renews on its own (matches the
+ * existing `RECURRING_TOKEN_BUCKETS` grouping in `freeModelCatalog.ts` —
+ * `recurring-daily`/`recurring-monthly` -> "steady-monthly",
+ * `recurring-credit` -> "recurring-credit", `recurring-uncapped` ->
+ * "uncapped"). Kept as its own small set here (rather than re-deriving from
+ * `FREE_REGIME_TRAITS`) so this module's fail-closed contract is visible
+ * without chasing an indirection — mirroring the D4.1 methodology note in
+ * `directCapabilities.data.ts`.
+ */
+const RECURRING_FREE_TYPES: ReadonlySet<FreeModelFreeType> = new Set([
+  "recurring-daily",
+  "recurring-monthly",
+  "recurring-credit",
+  "recurring-uncapped",
+]);
+
+/**
+ * Resolve `verifiedFree` for (provider, model) from the curated
+ * `FREE_MODEL_BUDGETS` catalog — an economic-evidence source entirely
+ * independent of the capability facts elsewhere in this module. Fail-closed:
+ *
+ *   - `true`  — catalogued under a recurring `freeType` (proven, renewing).
+ *   - `false` — catalogued under `one-time-initial`: a real grant, but
+ *     proven NOT recurring (a verdict, not "unknown" — matches the D2
+ *     contract that a proven negative is never conflated with null).
+ *   - `null`  — no catalog entry, or a `freeType` this resolver
+ *     deliberately does not classify either way (`keyless` — no credential
+ *     exists, a different risk axis than a recurring account quota, already
+ *     handled by `allowsNoAuthShortcut` in `strictZeroCostFilter.ts`;
+ *     `discontinued` — catalog-freshness note, not evidence about the
+ *     model's current regime).
+ *
+ * Never reads `hardStopGuaranteed` or any live/DB state — that is P4-B's
+ * account/connection billing-safety layer, explicitly out of scope here.
+ */
+export function resolveVerifiedFree(provider: string, model: string): boolean | null {
+  const entry = FREE_MODEL_BUDGETS.find((m) => m.provider === provider && m.modelId === model);
+  if (!entry) return null;
+  if (RECURRING_FREE_TYPES.has(entry.freeType)) return true;
+  if (entry.freeType === "one-time-initial") return false;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Extraction
 // ---------------------------------------------------------------------------
 
@@ -246,5 +309,6 @@ export function extractProviderModelInfo(
     codingClass: judgement.codingClass,
     strengthClass: judgement.strengthClass,
     claudeCodeReady: judgement.claudeCodeReady,
+    verifiedFree: resolveVerifiedFree(provider, model),
   };
 }

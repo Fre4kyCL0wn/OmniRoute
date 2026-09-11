@@ -1,11 +1,13 @@
 /**
- * Capability → Eligibility Producer (O9-F3.3P1-D2).
+ * Capability → Eligibility Producer (O9-F3.3P1-D2; `verifiedFree` added in
+ * O9-F3.4 P4-A).
  *
  * Maps the Direct Provider Capability Metadata (`ProviderModelInfo`, D1) — the
- * proven FACT layer — onto the six runtime-state eligibility booleans
- * (`ProviderCapabilities`). Each eligibility is an INDEPENDENT dimension proven
- * separately; none is inferred from another and there is NO cross-field
- * derivation (e.g. `<x>Eligible` never implies `supervisorEligible`).
+ * proven FACT layer — onto the runtime-state eligibility booleans
+ * (`EligibilityCapabilities`). Each eligibility is an INDEPENDENT dimension
+ * proven separately; none is inferred from another and there is NO
+ * cross-field derivation (e.g. `<x>Eligible` never implies `supervisorEligible`,
+ * and `verifiedFree` never implies `claudeCodeEligible` or vice versa).
  *
  * Fail-closed semantics (mirrors providerRuntimeState / freeModelEligibility):
  *   - `true`   — a layer PROVES the capability (positive fact).
@@ -27,7 +29,7 @@ import { getRegistryEntry } from "@omniroute/open-sse/config/providerRegistry.ts
 // Types
 // ---------------------------------------------------------------------------
 
-/** The six independent capability-eligibility verdicts (fail-closed). */
+/** The independent capability-eligibility verdicts (fail-closed). */
 export interface EligibilityCapabilities {
   executable: boolean | null;
   fastEligible: boolean | null;
@@ -35,6 +37,15 @@ export interface EligibilityCapabilities {
   genericToolEligible: boolean | null;
   claudeCodeEligible: boolean | null;
   supervisorEligible: boolean | null;
+  /**
+   * Economic evidence (O9-F3.4 P4-A) — sourced from `FREE_MODEL_BUDGETS`
+   * (`freeModelCatalog.data.ts`) via `resolveVerifiedFree`, entirely
+   * independent of the six capability dimensions above. NOT the same as
+   * "safe to route under a strict zero-cost policy" — see
+   * `resolveVerifiedFree`'s docblock and P4-B (account/connection billing
+   * safety, `hardStopGuaranteed`), both still open.
+   */
+  verifiedFree: boolean | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,5 +90,6 @@ export function produceCapabilities(info: ProviderModelInfo): EligibilityCapabil
     genericToolEligible: mapFlag(info.toolCalling),
     claudeCodeEligible: mapFlag(info.claudeCodeReady),
     supervisorEligible: mapClass(info.strengthClass, "frontier"),
+    verifiedFree: mapFlag(info.verifiedFree),
   };
 }

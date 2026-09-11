@@ -165,3 +165,19 @@ PUT /api/settings
 
 Both new settings default to their pre-feature values (`"off"` / `false`) — enabling neither
 changes any existing `auto/*` routing behavior.
+
+## Related, not yet connected: `EligibilityCapabilities.verifiedFree` (O9-F3.4 P4-A)
+
+`open-sse/config/providers/directCapabilities.ts` (`resolveVerifiedFree`) and
+`open-sse/services/capabilityEligibility.ts` (`EligibilityCapabilities.verifiedFree`) read the
+same `FREE_MODEL_BUDGETS` catalog this page describes, for the entirely separate D1/D2
+capability-eligibility pipeline (`claudeCodeEligible` etc.). It answers a narrower question than
+this page's `SAFE`/`EXHAUSTED`/`UNKNOWN` check: `verifiedFree: true` means the catalog classifies
+the model under a **recurring** `freeType` (`recurring-daily`/`-monthly`/`-credit`/`-uncapped`);
+`false` means a proven-non-recurring grant (`one-time-initial`, e.g. Cerebras's trial credit,
+#11773); `null` means no catalog entry, or `keyless`/`discontinued` (deliberately unclassified —
+see the resolver's docblock). It never reads `hardStopGuaranteed`, live quota state, or account
+billing context — **`verifiedFree: true` is not the same guarantee as passing this page's
+`STRICT_ZERO_COST` filter**, and the D1/D2 pipeline does not call into `strictZeroCostFilter.ts`
+today. Composing the two (account/connection billing-safety layer) is O9-F3.4 P4-B, not yet
+implemented.

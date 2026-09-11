@@ -150,15 +150,19 @@ test("9: every real, current Groq model remains invisible — no per-model tool-
 
 // ── 10/11/12/13: cost/free/quota/health independence ────────────────────────
 
-test("10/11: Cerebras remains entirely unseeded for claudeCodeReady — cost/free (trial) classification is a completely separate code path never touched here", () => {
+test("10/11: Cerebras remains entirely unseeded for claudeCodeReady — cost/free (trial) classification is a SEPARATE FIELD, sourced independently, never inferred from claudeCodeReady", () => {
   const cerebrasModels = ["zai-glm-4.7", "gemma-4-31b", "gpt-oss-120b"];
   for (const model of cerebrasModels) {
     const caps = produceCapabilities(extractProviderModelInfo("cerebras", model));
     assert.equal(caps.claudeCodeEligible, null);
   }
-  // Structural proof: resolveClaudeGatewayCapabilities/produceCapabilities
-  // read no cost/free/quota field at all — grep-verified during review;
-  // pinned here as a contract test on the return shape.
+  // Structural proof, updated for O9-F3.4 P4-A: produceCapabilities now DOES
+  // carry one cost/free-evidence field (`verifiedFree`, sourced from
+  // FREE_MODEL_BUDGETS via resolveVerifiedFree) — but still no live
+  // quota/health field, and it is never derived from claudeCodeReady or vice
+  // versa. gpt-oss-120b is catalogued `one-time-initial` (trial credit,
+  // #11773) — a proven FALSE, not the recurring-free TRUE a naive "Cerebras
+  // has a free tier" read would produce.
   const caps = produceCapabilities(extractProviderModelInfo("cerebras", "gpt-oss-120b"));
   assert.deepEqual(Object.keys(caps).sort(), [
     "claudeCodeEligible",
@@ -167,7 +171,10 @@ test("10/11: Cerebras remains entirely unseeded for claudeCodeReady — cost/fre
     "fastEligible",
     "genericToolEligible",
     "supervisorEligible",
+    "verifiedFree",
   ]);
+  assert.equal(caps.verifiedFree, false); // one-time-initial trial credit, not recurring
+  assert.equal(caps.claudeCodeEligible, null); // independent — still unproven
 });
 
 test("12/13: resolveClaudeGatewayCapabilities never touches quota/health — it is synchronous, not the async DB-backed getProviderRuntimeState", () => {

@@ -132,5 +132,41 @@ test("unknown provider leaves every dimension null (fail-closed)", () => {
     genericToolEligible: null,
     claudeCodeEligible: null,
     supervisorEligible: null,
+    verifiedFree: null,
   });
+});
+
+// ── verifiedFree (O9-F3.4 P4-A — FREE_MODEL_BUDGETS economic evidence) ─────
+// NOT auto-charge-safe by itself; see resolveVerifiedFree's docblock. P4-B
+// (hardStopGuaranteed, account/connection billing safety) is still open.
+
+test("verifiedFree is true for a recurring-uncapped catalogued model (gemini)", () => {
+  const caps = produceCapabilities(extractProviderModelInfo("gemini", "gemini-3.1-flash-lite"));
+  assert.equal(caps.verifiedFree, true);
+});
+
+test("verifiedFree is true for a recurring-daily catalogued model (groq)", () => {
+  const caps = produceCapabilities(extractProviderModelInfo("groq", "openai/gpt-oss-120b"));
+  assert.equal(caps.verifiedFree, true);
+});
+
+test("verifiedFree is FALSE (proven, not null) for a one-time-initial catalogued model (cerebras trial credit)", () => {
+  const caps = produceCapabilities(extractProviderModelInfo("cerebras", "gpt-oss-120b"));
+  assert.equal(caps.verifiedFree, false);
+});
+
+test("verifiedFree is null for a model with no free-catalog entry at all", () => {
+  // gemini-3.7-flash is claudeCodeEligible (D4.1-seeded) but NOT in
+  // freeModelCatalog.data.ts — the two evidence sources are independent.
+  const caps = produceCapabilities(extractProviderModelInfo("gemini", "gemini-3.7-flash"));
+  assert.equal(caps.verifiedFree, null);
+  assert.equal(caps.claudeCodeEligible, true);
+});
+
+test("verifiedFree does not imply or require claudeCodeEligible (independent sourcing)", () => {
+  // openrouter free models exist in the catalog but openrouter is entirely
+  // unseeded for claudeCodeReady (D4.1) — verifiedFree must not leak into it.
+  const caps = produceCapabilities(extractProviderModelInfo("openrouter", "auto"));
+  assert.equal(caps.verifiedFree, true);
+  assert.equal(caps.claudeCodeEligible, null);
 });
