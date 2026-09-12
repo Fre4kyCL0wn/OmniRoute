@@ -800,6 +800,63 @@ the translated upstream request (so whether `reasoning_effort` was sent) is not 
 
 Pinned by `tests/unit/groqLiveEvidenceP4e.test.ts`.
 
+## P4-G Groq Connection Zero-Cost Safety (O9-F3.4 P4-G)
+
+Audit only — no runtime, data or connection change. Verdict for the Shadow Groq connection:
+**`connectionSafeForZeroCost` stays `null`**, and that is the intended fail-closed result.
+
+**Where the model stands:** `groq/openai/gpt-oss-120b` is Claude-Code compatible (P4-E), with
+`verifiedFree: true` and `hardStopGuaranteed: true`. The connection has no billing evidence, so
+`resolveConnectionZeroCostSafety` (`open-sse/services/autoCombo/connectionBilling.ts`) returns
+`insufficient-evidence` and `evaluateZeroCostRoute` rejects the route with
+`connection-safety-unknown`. The live STRICT_ZERO_COST filter excludes it independently: Groq has
+no usage fetcher (`open-sse/services/usage/fetcherProviders.ts`), so its live quota state is
+UNKNOWN.
+
+**What Groq's published contract gives:** the Free plan has finite per-model limits and answers
+overuse with `429` ([rate limits](https://console.groq.com/docs/rate-limits)). Moving to the
+pay-as-you-go Developer tier requires adding a payment method
+([billing FAQs](https://console.groq.com/docs/billing-faqs)). Spend limits exist only on paid plans
+and apply organization-wide across all API keys
+([spend limits](https://console.groq.com/docs/spend-limits)), so they are not a Free-plan safety
+mechanism. The docs do not state outright that a Free-plan account can never be charged.
+
+**The missing proof is account-specific.** The hard stop holds for a Free-plan organization, but
+Jarvis cannot authoritatively determine that the organization behind this exact API key is still
+on the Free plan:
+
+- The Groq API exposes no organization, plan, billing or usage endpoint
+  ([API reference](https://console.groq.com/docs/api-reference)); the only authoritative source is
+  the Groq console billing page.
+- `authType: apikey` proves nothing about the tier, and the stored connection holds only
+  `importFreeModelsOnly` (a model-import filter).
+- An operator-declared "Free Plan" must not prove safe: the P4-B rule stands, and an
+  operator-declared `billingLinked: false` resolves to `null` (`unverified-not-linked`).
+- The plan belongs to the organization and can change later — an upgrade — without the stored API
+  key changing, which would silently change billing for the same connection.
+
+So no Groq `hard-stop` entry belongs in `connectionBillingCatalog.ts`, and connection safety stays
+fail-closed.
+
+**Checked, not a risk today:** Jarvis never sets `service_tier` for Groq —
+`resolveEffectiveServiceTier` (`open-sse/handlers/chatCore/serviceTier.ts`) returns `"standard"` for
+every provider except Codex — so Groq applies its default `on_demand` tier. A `service_tier` sent by
+an OpenAI-format client is not stripped for Groq; `flex` is paid-only and priced like on-demand
+([flex processing](https://console.groq.com/docs/flex-processing)). Groq model permissions ("Only
+Allow" / "Only Block" per organization or project,
+[model permissions](https://console.groq.com/docs/model-permissions)) narrow which models a key can
+reach; they are defense-in-depth, not billing proof.
+
+**Recommended future defense-in-depth (not implemented):**
+
+1. A dedicated Groq organization for Jarvis.
+2. No payment method on it.
+3. Allow only the approved free models (model permissions, "Only Allow").
+4. If that organization is ever upgraded, record `billingLinked: true` on the connection
+   immediately (already treated as unsafe).
+5. Optionally collect the `x-ratelimit-*` response headers as corroborating telemetry only — they
+   are not authoritative tier evidence.
+
 ## D5 FCC Preferred-Candidate Ranking Wiring (O9-F3.3P1-D5)
 
 D5 wires D0's already-built, already-tested `computeFccRankingSignal` (`fccRankingSignal.ts`) into
