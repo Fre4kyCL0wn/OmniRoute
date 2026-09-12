@@ -74,10 +74,10 @@ test("existing alias policy rejection is reported distinctly", () => {
 // ── Capability resolution (D1 -> D2, static seam) ───────────────────────
 
 test("7: FCC-known-only provider with unseeded claudeCodeReady resolves claudeCodeEligible=null (not visible)", () => {
-  // groq is FCC-mapped (D3) AND D1-curated for latency/coding facts, but
-  // claudeCodeReady is deliberately unseeded — proves FCC/registry presence
-  // alone never grants eligibility.
-  const caps = resolveClaudeGatewayCapabilities("groq", "openai/gpt-oss-120b");
+  // groq is FCC-mapped (D3) AND D1-curated for latency facts, but this
+  // model's claudeCodeReady is unseeded (only gpt-oss-120b is, from P4-E) —
+  // proves FCC/registry presence alone never grants eligibility.
+  const caps = resolveClaudeGatewayCapabilities("groq", "openai/gpt-oss-20b");
   assert.equal(caps.executable, true); // registry-served
   assert.equal(caps.claudeCodeEligible, null); // unseeded curated judgement
   const result = evaluateClaudeGatewayVisibility(baseInput({ ...caps }));
@@ -121,7 +121,7 @@ test("withClaudeGatewayCapabilityGate rejects when the existing predicate itself
 
 test("withClaudeGatewayCapabilityGate rejects an existing-predicate-approved but capability-unproven model", () => {
   const gate = withClaudeGatewayCapabilityGate(() => true);
-  assert.equal(gate({ id: "groq/openai/gpt-oss-120b" }), false); // claudeCodeEligible still null
+  assert.equal(gate({ id: "groq/openai/gpt-oss-20b" }), false); // claudeCodeEligible still null
 });
 
 test("withClaudeGatewayCapabilityGate lets combo entries through unchanged (out of scope for D1/D2)", () => {
@@ -153,13 +153,13 @@ test("15/16/17: withClaudeGatewayCapabilityGate parses path-shaped, :free-suffix
 
 test("filterNoThinkingMirrorsByCapability removes a no-think mirror when capability is unproven", () => {
   const models = [
-    { id: "groq/openai/gpt-oss-120b" },
-    { id: toNoThinkingAlias("groq/openai/gpt-oss-120b") },
+    { id: "groq/openai/gpt-oss-20b" },
+    { id: toNoThinkingAlias("groq/openai/gpt-oss-20b") },
   ];
   const filtered = filterNoThinkingMirrorsByCapability(models);
   assert.deepEqual(
     filtered.map((m) => m.id),
-    ["groq/openai/gpt-oss-120b"] // no-think mirror dropped, original untouched
+    ["groq/openai/gpt-oss-20b"] // no-think mirror dropped, original untouched
   );
 });
 

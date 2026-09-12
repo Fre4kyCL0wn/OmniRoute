@@ -203,24 +203,23 @@ test("8/9: targon (FCC-only, no OmniRoute registry entry) never gets a boost —
   assert.equal(boost, 0);
 });
 
-// ── 10. Groq: real registry + real FCC fixture -> still no boost ───────────
+// ── 10. Groq: real registry + real FCC fixture ─────────────────────────────
 
-test("10: Groq openai/gpt-oss-120b — FCC fixture says claudeCode.compatible=true, but D1/D2 claudeCodeEligible is unseeded (null) for every real Groq model, so the hard gate blocks it", () => {
+test("10: Groq openai/gpt-oss-120b — the boost applies only because Jarvis's own claudeCodeEligible is now true (P4-E live evidence), not because FCC says compatible", () => {
   const boost = resolveFccPreferenceSignal("groq", "openai/gpt-oss-120b");
   assert.equal(
     boost,
-    0,
-    "FCC's positive claim must NOT leak through D4.1/D4.2's proven-absent Groq tool-calling evidence"
+    1,
+    "hard gate passed on Jarvis evidence; FCC's positive claim is only the soft preference on top"
   );
 });
 
-test("10b: every real Groq registry model stays at 0 — matches D4.1/D4.2's 0 true / 0 false / 10 unknown finding exactly", () => {
+test("10b: every other real Groq registry model stays at 0 — only the P4-E model has Jarvis evidence", () => {
   const groqModels = [
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "llama-3.3-70b-versatile",
     "groq/compound",
     "allam-2-7b",
-    "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
     "qwen/qwen3-32b",
     "qwen/qwen3.6-27b",

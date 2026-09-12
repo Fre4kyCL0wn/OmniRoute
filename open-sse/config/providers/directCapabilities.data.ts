@@ -44,10 +44,13 @@
 // layers (Groq, Cerebras as of this pass) stays entirely unseeded, not
 // guessed. `false` is set only for a proven negative (registry
 // `toolCalling: false`) — never for merely-missing evidence.
+// O9-F3.4 P4-E: a live Shadow tool roundtrip counts as a per-model fact once
+// it is recorded in the registry; groq/openai/gpt-oss-120b is the first (and
+// only) Groq model seeded this way.
 import type { DirectProviderJudgement } from "./directCapabilities.ts";
 
 /** Date this capability seed was last curated against provider documentation. */
-export const DIRECT_CAPABILITY_CURATED_AT = "2026-09-11";
+export const DIRECT_CAPABILITY_CURATED_AT = "2026-09-12";
 
 /**
  * The direct-provider pool for O9-F3.3 capability extraction. Groq + Cerebras
@@ -82,7 +85,18 @@ export const DIRECT_PROVIDER_JUDGEMENTS: Record<
     // evidence: in-repo + public-page — gpt-oss is OpenAI's open-weights
     // coding/serving family (registry name "GPT-OSS …", free catalog "GPT OSS");
     // the guard-rail safeguard variant is safety-tuned, NOT coding-class.
-    "openai/gpt-oss-120b": { codingClass: "coding" },
+    //
+    // claudeCodeReady (O9-F3.4 P4-E): live Shadow evidence for THIS model only.
+    // Per-model fact: registry toolCalling=true (registry/groq/index.ts), from
+    // one isolated Claude Code run through Jarvis Shadow — text streamed and
+    // ended end_turn; one Bash tool_use (Groq tool_calls, finish tool_calls),
+    // tool_result accepted, Groq continuation ended stop; every row
+    // provider=groq on the same connection, no fallback. Translator pair:
+    // format:"openai" -> claude-to-openai.ts / openai-to-claude.ts. No fatal
+    // conflict: Groq's reasoning_content mapped to thinking blocks and the
+    // replayed thinking on the continuation raised no error. One text run and
+    // one tool roundtrip: not proof for the siblings or every protocol edge.
+    "openai/gpt-oss-120b": { codingClass: "coding", claudeCodeReady: true },
     "openai/gpt-oss-20b": { codingClass: "coding" },
   },
   cerebras: {

@@ -21,7 +21,10 @@ export const groqProvider: RegistryEntry = {
     // declare it here — undeclared models default to reasoning-capable via the heuristic.
     { id: "groq/compound", name: "Groq Compound", supportsReasoning: false },
     { id: "allam-2-7b", name: "ALLaM 2 7B", supportsReasoning: false },
-    { id: "openai/gpt-oss-120b", name: "GPT-OSS 120B" },
+    // toolCalling: live evidence for this exact model only (O9-F3.4 P4-E Shadow
+    // validation: Claude Code tool_use -> Groq tool_calls -> tool_result ->
+    // continuation). Siblings stay unset until proven on their own.
+    { id: "openai/gpt-oss-120b", name: "GPT-OSS 120B", toolCalling: true },
     { id: "openai/gpt-oss-20b", name: "GPT-OSS 20B" },
     { id: "qwen/qwen3-32b", name: "Qwen3 32B" },
     { id: "qwen/qwen3.6-27b", name: "Qwen3.6 27B" },

@@ -81,10 +81,11 @@ test("4: claudeCodeReady=true does not imply or require supportsReasoning/suppor
 
 // ── 5/6/7: FCC interaction unchanged by D4.1 ────────────────────────────────
 
-test("5: FCC provider presence alone still yields claudeCodeEligible=null (groq, unseeded)", () => {
+test("5: FCC provider presence alone still yields claudeCodeEligible=null (groq sibling, unseeded)", () => {
   const mapping = mapFccProvider("groq");
   assert.equal(mapping.status, "mapped"); // FCC knows groq
-  const caps = produceCapabilities(extractProviderModelInfo("groq", "openai/gpt-oss-120b"));
+  // gpt-oss-120b is seeded from P4-E live evidence (test 9); its sibling is not.
+  const caps = produceCapabilities(extractProviderModelInfo("groq", "openai/gpt-oss-20b"));
   assert.equal(caps.claudeCodeEligible, null); // still null — FCC presence never sufficed
 });
 
@@ -106,13 +107,13 @@ test("7: a conflicted/unregistered provider id still resolves to unknown, not a 
   assert.equal(caps.claudeCodeEligible, null);
 });
 
-// ── 8/9: Groq — mechanism proven generically, but NO real Groq model qualifies ──
+// ── 8/9: Groq — mechanism proven generically; only the P4-E model qualifies ──
 
 test("8: the visibility mechanism itself is provider-agnostic — a synthetic Groq-shaped capability set WOULD become visible if evidence existed", () => {
-  // Deliberately NOT using real Groq registry data here: no real Groq model
-  // has per-model tool-calling evidence today (see test 9), so this proves
-  // the GATE mechanism has no Groq-specific exclusion — visibility is purely
-  // a function of the capability facts, not the provider name.
+  // Deliberately NOT using real Groq registry data here: this proves the GATE
+  // mechanism has no Groq-specific exclusion — visibility is purely a
+  // function of the capability facts, not the provider name (test 9 covers
+  // the real data).
   const result = evaluateClaudeGatewayVisibility({
     featureEnabled: true,
     existingAliasPolicyAllows: true,
@@ -122,13 +123,23 @@ test("8: the visibility mechanism itself is provider-agnostic — a synthetic Gr
   assert.equal(result.visible, true);
 });
 
-test("9: every real, current Groq model remains invisible — no per-model tool-calling evidence exists for Groq today", () => {
+test("9: only groq/openai/gpt-oss-120b (P4-E live evidence) is visible — every other real Groq model stays invisible", () => {
+  const promoted = produceCapabilities(extractProviderModelInfo("groq", "openai/gpt-oss-120b"));
+  assert.equal(promoted.claudeCodeEligible, true);
+  assert.equal(
+    evaluateClaudeGatewayVisibility({
+      featureEnabled: true,
+      existingAliasPolicyAllows: true,
+      executable: promoted.executable,
+      claudeCodeEligible: promoted.claudeCodeEligible,
+    }).visible,
+    true
+  );
   const groqModels = [
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "llama-3.3-70b-versatile",
     "groq/compound",
     "allam-2-7b",
-    "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
     "qwen/qwen3-32b",
     "qwen/qwen3.6-27b",
@@ -297,9 +308,10 @@ test("18: seeding is strictly per-model — no '*' wildcard entry was introduced
 
 // ── End-to-end: catalog gate integration with real seeded data ────────────
 
-test("end-to-end: withClaudeGatewayCapabilityGate approves a real seeded Gemini catalog entry and rejects a real unseeded Groq one", () => {
+test("end-to-end: withClaudeGatewayCapabilityGate approves real seeded Gemini/Groq catalog entries and rejects a real unseeded Groq one", () => {
   const gate = withClaudeGatewayCapabilityGate<{ id: string }>(() => true);
   assert.equal(gate({ id: "gemini/gemini-2.5-pro" }), true);
-  assert.equal(gate({ id: "groq/openai/gpt-oss-120b" }), false);
+  assert.equal(gate({ id: "groq/openai/gpt-oss-120b" }), true); // P4-E live evidence
+  assert.equal(gate({ id: "groq/openai/gpt-oss-20b" }), false); // sibling, unseeded
   assert.equal(gate({ id: "nvidia/openai/gpt-oss-120b" }), false); // proven false, not just unknown
 });

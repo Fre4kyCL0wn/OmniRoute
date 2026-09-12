@@ -55,11 +55,15 @@ test("FCC-known + verified model does NOT bypass a real quota/health-driven exec
     executable: caps.executable,
     routeEligible: caps.claudeCodeEligible ?? false,
   });
-  // claudeCodeEligible is still null in the real pipeline (D1 curated seed
-  // has no claudeCodeReady fact for groq yet) — so the route gate is false
-  // and the signal correctly does not apply, even though FCC says compatible.
-  assert.equal(caps.claudeCodeEligible, null);
-  assert.equal(signalWhenReallyEligible.applies, false);
+  // claudeCodeEligible is true in the real pipeline only because of the P4-E
+  // live evidence seeded in D1 — the route gate reads that Jarvis value, and
+  // the executable=false case above shows FCC still cannot override it.
+  assert.equal(caps.claudeCodeEligible, true);
+  assert.equal(signalWhenReallyEligible.applies, true);
+
+  // A Groq sibling Jarvis has not seeded stays gated.
+  const sibling = produceCapabilities(extractProviderModelInfo("groq", "openai/gpt-oss-20b"));
+  assert.equal(sibling.claudeCodeEligible, null);
 });
 
 test("FCC evidence never changes the real producer's verdict for a model it has no opinion on", () => {

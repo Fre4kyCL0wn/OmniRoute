@@ -24,7 +24,7 @@ test("groq provider-wide default merges under per-model entries", () => {
   assert.equal(judgement.latencyClass, "fast"); // provider "*" default
   assert.equal(judgement.codingClass, "coding"); // per-model override
   assert.equal(judgement.strengthClass, null); // unproven stays null
-  assert.equal(judgement.claudeCodeReady, null);
+  assert.equal(judgement.claudeCodeReady, true); // per-model P4-E entry, not the "*" default
 });
 
 test("provider '*' default reaches every groq model, per-model wins on its field", () => {
@@ -68,16 +68,15 @@ test("provider-wide '*' does not leak onto models the provider does not serve", 
 
 // ── Extraction — curated + static layers ────────────────────────────────────
 
-test("groq gpt-oss-120b carries curated facts; unproven stays null", () => {
+test("groq gpt-oss-120b carries curated + P4-E facts; unproven stays null", () => {
   const info = extractProviderModelInfo("groq", "openai/gpt-oss-120b");
   assert.equal(info.provider, "groq");
   assert.equal(info.model, "openai/gpt-oss-120b");
   assert.equal(info.latencyClass, "fast");
   assert.equal(info.codingClass, "coding");
   assert.equal(info.strengthClass, null);
-  assert.equal(info.claudeCodeReady, null);
-  // no registry/spec source for this id in the static layers → not proven
-  assert.equal(info.toolCalling, null);
+  assert.equal(info.claudeCodeReady, true); // P4-E live evidence
+  assert.equal(info.toolCalling, true); // registry fact recorded from P4-E
   assert.equal(info.contextLength, null);
 });
 

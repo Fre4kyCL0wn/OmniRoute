@@ -753,6 +753,53 @@ streaming, tool call, tool-result continuation, finish reason, rate-limit header
 fallback and protocol errors. A text-only pass never justifies `true`. Pinned by
 `tests/unit/groqLiveEvidenceP4d.test.ts`.
 
+## P4-E Groq Live Evidence (O9-F3.4 P4-E)
+
+The P4-D sequence ran against Jarvis Shadow for exactly one model, **`groq/openai/gpt-oss-120b`**,
+and promoted it to `claudeCodeEligible: true`. This supersedes the "Groq stays null" results of
+D4.2, P4-C and P4-D for this model only.
+
+**Run:** isolated Claude Code (`--bare`, temporary home, empty working directory), explicit
+`--model groq/openai/gpt-oss-120b` against the Shadow API. Discovery was checked first:
+`/v1/models` exposed no `claude/` alias for Groq while the model was `null`.
+
+| Check               | Result                                                                                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Text                | Returned exactly `JARVIS_GROQ_OK`; streamed; Groq `finish_reason: stop` → Claude `end_turn`                                                             |
+| Tool call           | One `Bash` `tool_use` with `{"command":"pwd"}`; Groq `finish_reason: tool_calls`                                                                        |
+| Tool result         | `tool_result` with the same id accepted; Groq continuation ended `stop` with the correct directory; no file written                                     |
+| Provider / fallback | Every request row `provider=groq`, `model=openai/gpt-oss-120b`, same connection; no combo, no fallback                                                  |
+| Reasoning           | Groq returned `reasoning_content` on every response; mapped to Claude `thinking` blocks; the replayed thinking on the tool continuation raised no error |
+| Health              | Connection stayed active, no rate limit, backoff 0                                                                                                      |
+
+**Recorded as:** registry `toolCalling: true` on the Groq `openai/gpt-oss-120b` entry (the
+per-model fact) plus `claudeCodeReady: true` in `DIRECT_PROVIDER_JUDGEMENTS.groq` — the same
+semantics as the Gemini/NVIDIA seeds. No `"*"` entry, no sibling inheritance: `openai/gpt-oss-20b`,
+`openai/gpt-oss-safeguard-20b`, `qwen/qwen3.6-27b` and `qwen/qwen3.8-27b` stay `null`. Registry
+verdicts are now 11 `true` / 1 `false` / 2673 `null` of 2685, and zero-cost ∩ Claude Code is the
+four Gemini models plus this one. The D4 gate admits the model once the running image contains
+this change and `EXPOSE_CC_DISCOVERY_ALIASES` is on; Shadow still runs the pre-promotion image.
+
+**Cost separation:** unchanged. `verifiedFree` and `hardStopGuaranteed` are model facts that
+already existed. The Shadow Groq connection carries no billing evidence, so
+`connectionSafeForZeroCost` stays `null` and `evaluateZeroCostRoute` rejects the route with
+`connection-safety-unknown`. Claude compatibility never implies zero-cost eligibility.
+
+**Limits:** one text run and one single-tool roundtrip are evidence for this model, not for the
+siblings or every protocol edge (parallel tool calls, tool errors, long context, `xhigh` effort).
+Groq's `x-ratelimit-*` headers were not captured: Shadow does not store raw upstream headers, and
+the translated upstream request (so whether `reasoning_effort` was sent) is not logged either.
+
+**Observability gaps (documented, not fixed):**
+
+- The Shadow call-log detail artifact recorded the streamed tool-call `arguments` as an empty
+  string, while Claude Code received `{"command":"pwd"}` and the roundtrip succeeded. This is a
+  log-reconstruction gap, not a protocol incompatibility.
+- The text run triggered Claude Code's automatic session-title request, a second Groq request
+  that was neither a retry nor a fallback. Naming the session (`-n`) avoided it on the tool run.
+
+Pinned by `tests/unit/groqLiveEvidenceP4e.test.ts`.
+
 ## D5 FCC Preferred-Candidate Ranking Wiring (O9-F3.3P1-D5)
 
 D5 wires D0's already-built, already-tested `computeFccRankingSignal` (`fccRankingSignal.ts`) into
@@ -836,10 +883,12 @@ for exactly this reason.
 targon) — D3 only synced the FCC **provider-descriptor** catalog, not a per-model capability
 catalog (see the D3 section above). `resolveFccPreferenceSignal` is production-shaped and fully
 wired end-to-end, but with only 3 fixture rows and `DEFAULT_WEIGHTS.fccPreference = 0`, it has
-**zero observable effect on live routing today** — confirmed by test: even Groq's/Cerebras'
-`gpt-oss-120b` (both of which the fixture marks `claudeCode.compatible: true`) resolve to `0`,
-because neither has a proven `claudeCodeEligible` fact (D4.1/D4.2). The hard gate is doing exactly
-what it is supposed to do against real data. Before D6 raises the weight, either the fixture should
+**zero observable effect on live routing today**. Confirmed by test: Cerebras' `gpt-oss-120b`
+(fixture `claudeCode.compatible: true`) resolves to `0` because it has no proven
+`claudeCodeEligible` fact (D4.1/D4.2). Groq's `gpt-oss-120b` resolved to `0` for the same reason
+until O9-F3.4 P4-E proved `claudeCodeEligible` from live Shadow evidence; it now resolves to `1`,
+which the weight of `0` still multiplies away. The hard gate is doing exactly what it is supposed
+to do against real data. Before D6 raises the weight, either the fixture should
 be replaced by a real synced FCC snapshot, or the D6 activation must say explicitly why it is
 proceeding without one.
 

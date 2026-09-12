@@ -50,13 +50,13 @@ test("executable is null for an unregistered provider (unknown)", () => {
 
 // ── Independent eligibility dimensions from curated judgement ──────────────
 
-test("groq gpt-oss-120b: fast + coding proven; unproven dimensions stay null", () => {
+test("groq gpt-oss-120b: fast + coding + P4-E tool/Claude facts proven; unproven dimensions stay null", () => {
   const caps = produceCapabilities(extractProviderModelInfo("groq", "openai/gpt-oss-120b"));
   assert.equal(caps.executable, true);
   assert.equal(caps.fastEligible, true); // latencyClass "fast"
   assert.equal(caps.codingEligible, true); // codingClass "coding"
-  assert.equal(caps.genericToolEligible, null); // toolCalling not proven
-  assert.equal(caps.claudeCodeEligible, null); // claudeCodeReady not proven
+  assert.equal(caps.genericToolEligible, true); // registry toolCalling (P4-E live evidence)
+  assert.equal(caps.claudeCodeEligible, true); // claudeCodeReady (P4-E live evidence)
   assert.equal(caps.supervisorEligible, null); // strengthClass not proven
 });
 
@@ -108,8 +108,10 @@ test("supervisorEligible is proven only by the frontier strength class", () => {
 });
 
 test("no cross-field inference: one proven dimension never implies another", () => {
+  // gpt-oss-20b: a Groq sibling without its own claudeCodeReady seed (the
+  // 120b is seeded from P4-E live evidence).
   const caps = produceCapabilities(
-    infoFor("groq", "openai/gpt-oss-120b", {
+    infoFor("groq", "openai/gpt-oss-20b", {
       codingClass: "coding",
       strengthClass: "frontier",
       toolCalling: true,

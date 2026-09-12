@@ -1,9 +1,11 @@
 /**
  * O9-F3.4 P4-C — Claude Code compatibility evidence expansion for zero-cost
- * candidates. The audit added no new facts: no Groq, OpenRouter or self-hosted
- * model meets the D4.1 contract (model-specific tool-calling fact + the
- * generically tested Claude translator pair + no known fatal conflict). These
- * tests pin that outcome so a future seed cannot slip in without evidence.
+ * candidates. The audit added no new facts: no OpenRouter or self-hosted model
+ * meets the D4.1 contract (model-specific tool-calling fact + the generically
+ * tested Claude translator pair + no known fatal conflict). The one later
+ * change is groq/openai/gpt-oss-120b, promoted by P4-E live Shadow evidence
+ * (see groqLiveEvidenceP4e.test.ts). These tests pin that outcome so a future
+ * seed cannot slip in without evidence.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -27,16 +29,17 @@ function registryVerdicts(pick: (c: ReturnType<typeof caps>) => boolean): string
   return out.sort();
 }
 
-const GROQ_RECURRING_FREE = [
-  "openai/gpt-oss-120b",
+// The four Groq recurring-free siblings without their own evidence. The fifth,
+// openai/gpt-oss-120b, is covered by the P4-E promotion test.
+const GROQ_RECURRING_FREE_UNPROVEN = [
   "openai/gpt-oss-20b",
   "openai/gpt-oss-safeguard-20b",
   "qwen/qwen3.6-27b",
   "qwen/qwen3.8-27b",
 ];
 
-test("free does not imply Claude compatibility: Groq recurring-free models stay null", () => {
-  for (const model of GROQ_RECURRING_FREE) {
+test("free does not imply Claude compatibility: unproven Groq recurring-free models stay null", () => {
+  for (const model of GROQ_RECURRING_FREE_UNPROVEN) {
     const info = extractProviderModelInfo("groq", model);
     const c = produceCapabilities(info);
     assert.equal(c.verifiedFree, true, `groq/${model} verifiedFree`);
@@ -88,7 +91,7 @@ test("sibling models do not inherit: an unregistered Groq id is not executable a
   assert.equal(c.claudeCodeEligible, null);
 });
 
-test("registry-wide verdicts are exactly the D4.1 set: 10 true, 1 false", () => {
+test("registry-wide verdicts are exactly the D4.1 set plus the P4-E Groq model: 11 true, 1 false", () => {
   assert.deepEqual(
     registryVerdicts((c) => c.claudeCodeEligible === true),
     [
@@ -99,6 +102,7 @@ test("registry-wide verdicts are exactly the D4.1 set: 10 true, 1 false", () => 
       "gemini/gemini-3.1-flash-lite",
       "gemini/gemini-3.1-pro-preview",
       "gemini/gemini-3.7-flash",
+      "groq/openai/gpt-oss-120b",
       "nvidia/deepseek-ai/deepseek-v4-flash-0731",
       "nvidia/deepseek-ai/deepseek-v4-pro-0813",
       "nvidia/moonshotai/kimi-k3",
@@ -110,7 +114,7 @@ test("registry-wide verdicts are exactly the D4.1 set: 10 true, 1 false", () => 
   );
 });
 
-test("zero-cost intersection: only the four recurring-free Gemini models are free and Claude-compatible", () => {
+test("zero-cost intersection: the four recurring-free Gemini models plus groq/openai/gpt-oss-120b", () => {
   assert.deepEqual(
     registryVerdicts((c) => c.verifiedFree === true && c.claudeCodeEligible === true),
     [
@@ -118,6 +122,7 @@ test("zero-cost intersection: only the four recurring-free Gemini models are fre
       "gemini/gemini-2.5-flash-lite",
       "gemini/gemini-3-flash-preview",
       "gemini/gemini-3.1-flash-lite",
+      "groq/openai/gpt-oss-120b",
     ]
   );
 });
