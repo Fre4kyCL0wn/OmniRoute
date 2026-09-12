@@ -688,6 +688,26 @@ made to `directCapabilities.data.ts`'s `DIRECT_PROVIDER_JUDGEMENTS.groq` block, 
 added (the existing test 9 already covers this exact invariant by id). Fail-closed contract
 preserved; D4's gate logic untouched.
 
+## P4-C Claude Code Evidence for Zero-Cost Candidates (O9-F3.4 P4-C)
+
+Re-ran the unchanged D4.1 bar (model-specific tool-calling fact + one of the two generically
+tested translator pairs + no known fatal conflict) against every zero-cost candidate. Result:
+**no new `true`, no new `false`** — still 10 / 1 / 2674 of 2685.
+
+| Candidate                                                                                    | `verifiedFree`      | Model-specific tool fact     | Verdict | Why it stays `null`                                                                                                                                                                                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------- | ------------------- | ---------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Groq `openai/gpt-oss-120b`, `-20b`, `-safeguard-20b`, `qwen/qwen3.6-27b`, `qwen/qwen3.8-27b` | true                | none                         | null    | Same as D4.2. FCC's `test_groq.py` proves `tool_use` → `tool_calls` translation with a generic model id: mechanism only, not a per-model fact.                                                                                                                                                                                        |
+| OpenRouter `auto`, `stealth/ox-alpha`, `liquid/lfm-2.5-2.6b:free`                            | true                | none in D1                   | null    | `auto` picks a different upstream per request, so no single model can be proven. The others only have OpenRouter's runtime `supported_parameters` metadata (catalog/DB layer, excluded from D1 by design), and a `:free` variant can reach different upstream endpoints. FCC filters on the same metadata — supporting evidence only. |
+| `mlx-gemma`, `mlx-qwen`                                                                      | null (uncatalogued) | registry `toolCalling: true` | null    | Tool calling on a self-hosted server is a property of the operator's deployment (server version, chat template), not the model. The registry value is only re-asserted by a shape test (`mlx-provider.test.ts`); no deployment-level evidence exists.                                                                                 |
+| The other 10 self-hosted providers                                                           | —                   | —                            | null    | No `open-sse` registry entry, so D2 `executable` is `null` and the D4 gate rejects them regardless.                                                                                                                                                                                                                                   |
+
+Zero-cost ∩ Claude Code (`verifiedFree` and `claudeCodeEligible` both `true`) is exactly the four
+recurring-free Gemini models. P4-B connection safety is `null` for every stored connection today,
+so none is route-eligible yet. All of this is pinned by `tests/unit/claudeCodeEvidenceP4c.test.ts`.
+
+What would move a candidate: one live Claude Code tool roundtrip through Shadow per model (D6-L3
+style) — deferred; it needs operator approval and, for Groq, a connection that does not exist yet.
+
 ## D5 FCC Preferred-Candidate Ranking Wiring (O9-F3.3P1-D5)
 
 D5 wires D0's already-built, already-tested `computeFccRankingSignal` (`fccRankingSignal.ts`) into
