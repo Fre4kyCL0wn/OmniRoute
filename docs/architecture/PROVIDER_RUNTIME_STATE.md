@@ -1699,3 +1699,208 @@ written, or activated anywhere in this phase.
 - No modification to `combo.ts` or any native strategy file — every reuse in A5 is an import of
   an existing pure function (`rankByHeadroom`, `getResetWindowRemainingMs`, `scorePool` in
   tests), never a copy or a fork.
+
+## Jarvis Strategy Policy Engine (O9-F3.5 A6 / "A5.1")
+
+A5 answered "who may play" (`JarvisSafeCandidateSet`). A6 answers the next question — "what
+game plan fits this request" — by recommending WHICH native strategy (of A5's audited, proven
+inventory) should execute over that same safe set. OmniRoute remains the sole executor.
+
+```
+JARVIS CHOOSES WHO MAY PLAY.
+JARVIS CHOOSES THE GAME PLAN.
+OMNIROUTE EXECUTES THE PLAY.
+```
+
+### 1. Strategy decision contract
+
+`recommendStrategy(input): StrategyRecommendation` (`src/lib/failover/strategyPolicyEngine.ts`)
+— pure, deterministic, no DB/network/routing call. `{ strategy: CandidateStrategy | null,
+confidence: "high"|"medium"|"low", reasons: StrategyReasonCode[], requiresSafeScopedAutoCombo?:
+true, evidenceSummary }`. `strategy: null` is the only terminal outcome (empty A5 safe pool) —
+never converted into a fallback strategy, matching A4's NO_SAFE_ROUTE exactly one layer up.
+
+### 2. Native strategy prerequisites (A6 spec §12, reused from the A5 audit)
+
+Recommendable strategies are a deliberate SUBSET of A5's 20: `priority`, `headroom`,
+`reset-window`, `p2c`, `least-used`, `context-optimized`, `cache-optimized`, `auto` — the ones
+this phase's own decision-rule examples ground in evidence. `weighted`, `round-robin`,
+`fill-first`, `cost-optimized`, `fusion`, `pipeline`, `lkgp`, `quota-share` remain fully
+OmniRoute-owned, valid strategies A6 simply has no fact-grounded rule to recommend yet — not
+implemented, not guessed.
+
+| Strategy             | Prerequisite (absent → ineligible, never guessed)                                                                                                                                                                                                               |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `headroom`           | at least one safe candidate with a known headroom/utilization signal                                                                                                                                                                                            |
+| `reset-window`       | at least one safe candidate with a known reset window/timestamp                                                                                                                                                                                                 |
+| `context-optimized`  | a known context capacity for the safe pool AND an actual large-context requirement on the request                                                                                                                                                               |
+| `cache-optimized`    | a usable cache-affinity signal for at least one safe candidate                                                                                                                                                                                                  |
+| `p2c` / `least-used` | ≥2 caller-declared equivalent/interchangeable safe candidates; `p2c` additionally needs live per-request load telemetry, `least-used` needs only cumulative usage counts (a lower evidence bar) — the distinguishing FACT, not the provider, picks between them |
+| `auto`               | ≥3 safe candidates, a coding-shaped request, and nothing more specific already matched — always paired with `requiresSafeScopedAutoCombo: true`                                                                                                                 |
+| `priority`           | always eligible — the proven, simplest native strategy; the universal fallback                                                                                                                                                                                  |
+
+### 3. Deterministic precedence (A6 spec §6)
+
+SAFE_POOL_EMPTY (terminal) → SINGLE_SAFE_ROUTE → LARGE_CONTEXT_REQUIRED (a hard capability
+requirement, checked before stability — a route that cannot serve the context must not be kept
+"for stability") → STABLE_CURRENT_ROUTE (hysteresis, §8 below) → QUOTA_PRESSURE +
+RESET_WINDOWS_AVAILABLE → HEADROOM_AVAILABLE → LOCAL_LOAD_BALANCING →
+CACHE_AFFINITY_AVAILABLE → MULTI_FACTOR_POOL (`auto`) → CONSERVATIVE_FALLBACK (`priority`).
+Every rule is a pure `if` in that fixed order — no scoring, no randomness.
+
+### 4. Single-route behavior
+
+Exactly one safe candidate (in the requested pool) → `priority`, confidence `high`, reason
+SINGLE_SAFE_ROUTE — the "conservative single-route strategy" A6 spec §17 test A asks for.
+
+### 5. Priority behavior
+
+Default for 2+ safe candidates when nothing more specific applies (ORDERED_BACKUPS +
+CONSERVATIVE_FALLBACK) and the universal fallback for missing telemetry. A5's own
+`resolvedComboTargetIdentity`/`filterToJarvisSafeCandidateSet` guarantee a blocked route can
+never appear at any position — including as a "backup" — since `priority` IS the filtered array
+order (A5 §1).
+
+### 6. Headroom behavior
+
+Recommended once at least one safe candidate has a known headroom signal, confidence scaled by
+COVERAGE (`known / totalSafe`: 100% → `high`, ≥50% → `medium`, else `low`) — reused from A5's
+real `rankByHeadroom`, never reimplemented.
+
+### 7. Reset behavior
+
+Recommended only under quota pressure AND with reset-window evidence present — test E proves
+reset windows unknown under pressure never selects `reset-window` (falls through to `headroom`
+if available, else further down the precedence chain). Confidence is coverage-scaled, same
+formula as headroom.
+
+### 8. Context behavior
+
+`context-optimized` fires only when the request has an actual context-size estimate greater than
+zero AND the safe pool's known capacity is non-null — `high` confidence when the known capacity
+covers the estimate, `medium` when it might not (still the best available evidence, never
+silently downgraded to `priority`). Placed ahead of hysteresis deliberately (§3).
+
+### 9. Local balancing behavior
+
+`p2c` vs `least-used` is decided by ONE fact — `liveLoadTelemetryAvailable` — never by provider
+identity. Test M swaps provider names (`groq`/`gemini` vs `nvidia`/`cerebras`) while holding
+every fact identical and asserts an IDENTICAL recommendation, proving fact-based, not
+provider-hardcoded, logic (A6 spec §11).
+
+### 10. Conservative fallback
+
+When nothing more specific has sufficient evidence, `priority` — never zero-config `auto` (A5
+proved that path can expand to every active connection's catalog). `reasons` names
+INSUFFICIENT_TELEMETRY when the pool itself is too small/telemetry-free to justify anything
+richer, CONSERVATIVE_FALLBACK always accompanies the fallback pick.
+
+### 11. Strict-zero-cost isolation
+
+A6 never re-derives a candidate count — it reads `safeSet.strictZeroCost` (already ⊆
+`safeSet.general` by A5's own construction) when `poolKind: "strictZeroCost"`. Test H proves a
+general-only-safe candidate is invisible to `evidenceSummary.safeCandidateCount` under strict
+mode; test I proves a candidate with tempting-looking telemetry but a proven `false` capability
+never counts, regardless of what the caller's telemetry facts claim about it — safety is
+computed by A4/A5's own gate, never by A6's telemetry inputs.
+
+### 12. AutoCombo safety (A6 spec §18, hard regression test)
+
+Every `strategy: "auto"` recommendation unconditionally carries `requiresSafeScopedAutoCombo:
+true` — asserted directly by a dedicated test, and structurally impossible to omit (`auto` is
+returned from exactly one code path, which always sets the field). A second test proves an empty
+safe pool never recommends `auto` regardless of task type or historical candidate richness —
+SAFE_POOL_EMPTY short-circuits before any strategy rule, including `auto`'s.
+
+### 13. Anti-flapping design (A6 spec §7/§8)
+
+No timers. `StrategyHysteresisFacts` — `previousStrategy`, `currentRouteHealthyAndSafe`,
+`candidateSetChanged`, `pressureStateChanged`, `policyModeChanged` — are caller-owned, explicit
+state-transition facts (A6 holds no mutable state of its own, matching A4's own restart model).
+When the current route is healthy/safe and none of the three "changed" flags are set, A6 returns
+the PREVIOUS strategy unchanged (STABLE_CURRENT_ROUTE) even when fresh telemetry would
+otherwise justify a different pick (test J) — and immediately re-evaluates the moment any one
+flag flips (test J2). This is deliberately conservative: A6 designs the persistence
+REQUIREMENTS (what facts a caller must track across requests) without owning any redundant
+mutable state itself.
+
+### 14. Explainability output
+
+`evidenceSummary` is a small, flat, structured object (`safeCandidateCount`, `poolKind`, known
+counts, quota pressure) — no prompt content, no secret, no upstream response body. `reasons` is
+an ordered `StrategyReasonCode[]`, reusing the exact vocabulary A6 spec §14 names.
+
+### 15. Dry-run behavior
+
+`recommendAndDryRunStrategy` (same file) calls `recommendStrategy`, then — only when a native
+pool + identity extractor were supplied AND the recommended strategy is one A5's
+`dryRunNativeStrategy` supports directly (`priority`/`headroom`/`reset-window`, or any strategy
+via an injected `customScore`) — reuses A5's real dry-run bridge over the identical safe set.
+Read-only throughout; no live Combo, no provider request.
+
+### 16. Provider-independence proof
+
+Test M (§9 above) is the direct proof: two structurally identical safe sets differing only in
+provider names produce byte-identical recommendations (`strategy`, `reasons`, `confidence` all
+equal). No `if (provider === …)` branch exists anywhere in `strategyPolicyEngine.ts`.
+
+### 17. Future autonomous strategy switching (design only — not implemented)
+
+```
+runtime facts change (A2 refresh / quota event / health event)
+  ↓
+Jarvis recalculates the safe candidate set (A5 buildSafeCandidateSet)
+  ↓
+Jarvis recalculates the recommended strategy (A6 recommendStrategy, same hysteresis facts)
+  ↓
+if material change (candidateSetChanged / pressureStateChanged / policyModeChanged / large-context):
+  update the managed Combo's strategy field atomically (single native write, all-or-nothing)
+  ↓
+OmniRoute continues native execution under the new strategy
+```
+
+Requirements for a future implementation: **idempotent** (re-running with unchanged facts must
+produce the same recommendation and therefore no write — A6's own determinism, test L, is the
+prerequisite this relies on); **auditable** (every recommendation already carries its full
+`reasons`/`evidenceSummary` — nothing to add, just persist the trace); **anti-flapping** (already
+designed, §13 — a future scheduler must feed real hysteresis facts, not re-invent timers);
+**restart-safe** (no A6-internal state; `previousStrategy` is the only cross-request fact needed,
+recoverable from whatever last wrote the managed Combo); **no half-written Combo state** (mirrors
+A5's own future-Combo-management requirement — single atomic strategy-field replace, never a
+partial multi-step mutation). **Not implemented here** — no route, hook, UI, or job calls
+`recommendStrategy` in this phase, and no Combo is read, written, or activated.
+
+### 18. Future provider/model sync — the full autonomous lifecycle this fits into
+
+```
+Provider discovered
+  ↓
+models observed (A2)
+  ↓
+evidence resolved (A2)
+  ↓
+validation / activation approval (A3)
+  ↓
+safe candidate set (A5)
+  ↓
+strategy recommendation (A6)
+  ↓
+managed Combo (future, not implemented)
+  ↓
+native OmniRoute execution
+  ↓
+health/quota feedback
+  ↓
+re-evaluation (loops back to safe candidate set / strategy recommendation)
+```
+
+### Explicitly out of scope for A6
+
+- No strategy execution, no `handleComboChat` call, no live dispatch path.
+- No managed-Combo read/write, no `syncedAvailableModels` / `customModels` write.
+- No Auto-Sync re-enablement; `auto` is only ever recommended with
+  `requiresSafeScopedAutoCombo: true` and is never itself responsible for enforcing that scoping
+  (the caller/executor must honor it) — A6 makes the obligation explicit and testable, it does
+  not (and structurally cannot, being a pure recommender) enforce it at execution time.
+- No competing task/intent classifier — `RequestClassFacts.taskType` mirrors the existing
+  `mapIntentToTaskType` 3-way bucket exactly; A6 never parses a prompt itself.
