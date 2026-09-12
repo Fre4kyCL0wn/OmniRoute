@@ -1327,3 +1327,123 @@ has explicitly selected it — nothing in the app calls `evaluateActivationDecis
 - No wiring of `activate: true` into the existing synced/custom-models activation writer.
 - No default policy mode other than `manual`.
 - Automatic failover / model switching on a degraded route is O9-F3.5 A4 (roadmap), not A3.
+
+## Autonomous Failover Decision Engine (O9-F3.5 A4)
+
+A4 answers a different question than A2/A3: not "is this model evidence-backed and
+activation-permitted" but "when the CURRENT route fails, what should Jarvis do about it, right
+now, without touching anything." It is decision-only — no live switch, no activation, no
+provider request, no DB write:
+
+```
+REQUEST
+  ↓
+CURRENT ROUTE
+  ↓
+RUNTIME STATE (ProviderRuntimeState — reused, not duplicated)
+  ↓
+FAILURE?
+  ├─ no (or a caller/request error) → KEEP_CURRENT
+  └─ yes
+       ↓
+    HARD ELIGIBILITY (RouteHardFacts — connection active, evidence current,
+                       executable, claudeCodeEligible, no known protocol
+                       conflict, A3-permitted, not administratively disabled)
+       ↓
+    POLICY / COST SAFETY (strict_zero_cost mode only: A2/A3's own zero-cost
+                           route contract — never re-derived)
+       ↓
+    HEALTH / QUOTA / COOLDOWN (ProviderRuntimeState fields; loop prevention
+                                via caller-supplied attemptedRouteIds)
+       ↓
+    CAPABILITY MATCH (optional context/tool requirements)
+       ↓
+    BEST SAFE CANDIDATE (deterministic score: health > quota > proven
+                          requirements match > provider diversity > capped
+                          external-score tiebreak; never random, never a
+                          hardcoded provider order)
+       ↓
+    SWITCH_TO | ACTIVATION_REQUIRED | WAIT_COOLDOWN | NO_SAFE_ROUTE
+```
+
+Core rule: **AUTO FAILOVER != PAID FAILOVER.** Under `strict_zero_cost` policy, a candidate
+without a proven zero-cost route is never selected — Jarvis returns NO_SAFE_ROUTE instead of
+knowingly picking a paid or cost-unproven route.
+
+### Files
+
+- `src/lib/failover/failoverDecision.ts` — the pure core engine. Zero A2/A3 import: accepts
+  the generic `RouteHardFacts` / `FailoverCandidate` contract so it covers routes A2 never
+  observes (a statically registered provider like Gemini, or a future local/self-hosted
+  provider) as naturally as an A2-observed one. Exports `evaluateFailoverDecision` (the one
+  decision function) and `dryRunFailoverDecision` (a read-only reshaping of the same result into
+  "candidates eligible / candidates rejected" — there is no separate "live" evaluator for it to
+  diverge from; A4 ships decision + dry-run only, nothing else).
+- `src/lib/failover/failoverA3Adapter.ts` — the only file that imports the A2 observation
+  (`ResolvedObservation`) and A3 activation (`ActivationDecision`) types, translating them into
+  a `FailoverCandidate`. `alreadyRoutable` is a caller-observed FACT (is the model really present
+  in the existing synced/custom-models pool today), never derived from A3's `activate` verdict —
+  that field is a computed permission, not evidence a write happened. This is why the file, like
+  the rest of A4, never calls the real activation writer and never reads
+  `syncedAvailableModels` / `customModels` itself.
+- The A2 architectural guard test (`tests/unit/providerOnboardingNvidiaA2.test.ts`, test "I") now
+  also allowlists `failoverA3Adapter.ts` as an authorized observation-layer consumer, while still
+  asserting it never references the real activation writer. `failoverDecision.ts` itself needs no
+  allowlisting — it has no A2/A3 coupling at all.
+
+### Reused authorities (nothing duplicated)
+
+| Concern                                                         | Reused from                                                                                                                      | Not rebuilt                         |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Health / account / quota / cooldown / cost class / capabilities | `ProviderRuntimeState` (`open-sse/services/providerRuntimeState.ts`)                                                             | a parallel health/quota/cost system |
+| General activation eligibility                                  | A3 `isGeneralActivationCandidate` (restated generically as `RouteHardFacts`/`isHardEligible` so non-A2 providers fit too)        | a second eligibility gate           |
+| Zero-cost route safety                                          | A2/A3's own `zeroCostEligible` / `strictZeroCostCandidate` (built on `evaluateZeroCostRoute`, `resolveConnectionZeroCostSafety`) | a new cost model                    |
+| Activation handoff states                                       | A3 `ObservationStatus` / `ActivationDecision` via `failoverA3Adapter.ts`                                                         | a second activation gate            |
+| 429 rate-limit vs quota-exhausted nuance                        | `classify429`/`FailureKind` (feeds `ProviderRuntimeState`, consumed indirectly)                                                  | a second 429 classifier             |
+
+**Deliberately not reused**: `src/domain/fallbackPolicy.ts` / `policyEngine.ts` / `lockoutPolicy.ts`
+(FASE-06/09, T-19/T-46). These are an older, DB-mutating, JS-typed, operator-configured static
+provider-priority system, architecturally disconnected from `ProviderRuntimeState` and the O9-F3.x
+evidence pipeline — they know nothing about capability evidence, zero-cost safety, or A2/A3.
+Building A4 on top of them would mean depending on mutable module-level state and a second,
+mismatched notion of "fallback," not reuse. A4 builds on the evidence-based side
+(`ProviderRuntimeState` + A2 + A3) to stay consistent with A2/A3's own architecture.
+
+### Reason codes
+
+`FailoverReason` mirrors the spec's requested set, plus three additions, each because no
+existing code was equivalent: PROVIDER_HEALTH_FAILURE (circuit breaker vs a dead connection —
+distinct from CONNECTION_UNAVAILABLE), ADMINISTRATIVELY_DISABLED (an operator hide/disable is
+not the same as an unproven or incompatible model), and CALLER_ERROR (a request-shape problem
+must never read as a route failure). `network_error` / `auth_failed` / `model_removed` current-route
+failure kinds fold into CONNECTION_UNAVAILABLE / MODEL_UNAVAILABLE reason codes rather than
+minting near-duplicate codes for them.
+
+### Current-route bias and loop prevention
+
+`currentRouteFailure: "none"` (healthy) and `"caller_error"` both short-circuit to KEEP_CURRENT
+before any candidate is even looked at — a marginally higher-scoring alternative can never
+dislodge a healthy route, and a client-side schema/parameter problem can never trigger
+cross-provider failover. `attemptedRouteIds` is a caller-owned, request-scoped set this engine
+never persists; a route present in it is rejected with ATTEMPTED_ALREADY before any other
+check, which is what makes an `A → B → A → B` loop structurally impossible as long as the caller
+accumulates the set correctly across hops within one request.
+
+### Restart / reconstruction model
+
+Nothing in A4 is persisted. Every call is a fresh, independent evaluation over
+`ProviderRuntimeState` (already backed by the DB / circuit breaker / quota authorities),
+`attemptedRouteIds` (request-scoped, caller-owned), and A2/A3's own evidence — so a provider that
+recovers (cooldown expires, quota resets) is naturally eligible again on the next independent
+call with no A4-specific state to reset or migrate across a restart.
+
+### Explicitly out of scope for A4
+
+- No live route switch, no model activation, no write to `syncedAvailableModels` /
+  `customModels`, no provider/inference request — decision and dry-run only.
+- No execution feature flag is introduced in A4; wiring a decision into an actual switch is
+  future work, and any such flag must default OFF per Hard Rule discipline (not enabled in
+  Shadow or Production here).
+- Ranking is deliberately simple and documented (health > quota > proven requirements match >
+  provider diversity > capped external-score tiebreak) — it does not call into `combo.ts`'s live
+  AutoCombo scoring engine, which is a large, side-effecting execution path, not a pure function.

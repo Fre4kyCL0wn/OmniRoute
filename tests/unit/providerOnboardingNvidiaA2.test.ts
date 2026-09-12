@@ -420,10 +420,14 @@ test("H: unknown stays null; upstream flags and zero prices promote nothing", ()
 
 /**
  * Every production file in the observation write path, plus (O9-F3.5 A3) the
- * activation policy layer explicitly authorized to read resolved
- * observations. A3 is still not a routing consumer: `ACTIVATION_WRITERS`
- * below still asserts none of these files — A3's included — ever reference
- * the real activation adapter.
+ * activation policy layer and (O9-F3.5 A4) the failover decision engine's A3
+ * adapter — both explicitly authorized to read resolved observations. Neither
+ * is a routing consumer: `ACTIVATION_WRITERS` below still asserts none of
+ * these files — A3's and A4's included — ever reference the real activation
+ * adapter. A4's core decision engine (`src/lib/failover/failoverDecision.ts`)
+ * deliberately does NOT need this allowlist at all — it has zero A2/A3
+ * coupling by design; only `src/lib/failover/failoverA3Adapter.ts` (the
+ * translation layer) touches this pipeline.
  */
 const OBSERVATION_FILES = [
   "src/lib/providerOnboarding/types.ts",
@@ -434,6 +438,7 @@ const OBSERVATION_FILES = [
   "src/lib/providerOnboarding/activationPolicy.ts",
   "src/lib/db/providerObservedModels.ts",
   "src/lib/db/providerActivationApprovals.ts",
+  "src/lib/failover/failoverA3Adapter.ts",
   "src/app/api/providers/[id]/models/discovery/configuredCatalogFetch.ts",
   "src/app/api/providers/[id]/models/discovery/providerObservationRefresh.ts",
 ];
