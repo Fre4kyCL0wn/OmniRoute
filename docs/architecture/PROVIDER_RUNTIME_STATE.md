@@ -1905,6 +1905,249 @@ re-evaluation (loops back to safe candidate set / strategy recommendation)
 - No competing task/intent classifier — `RequestClassFacts.taskType` mirrors the existing
   `mapIntentToTaskType` 3-way bucket exactly; A6 never parses a prompt itself.
 
+## Managed Combo Orchestration (O9-F3.5 A7)
+
+A6 answered "what game plan fits this request." A7 turns that game plan into a deterministic
+description of what a native OmniRoute Combo SHOULD contain, and a read-only plan for getting
+there — without ever writing one. The full control loop this phase completes:
+
+```
+DISCOVER
+  ↓
+OBSERVE (A2)
+  ↓
+EVIDENCE (A2)
+  ↓
+ACTIVATION GATE (A3)
+  ↓
+FAILOVER POLICY (A4)
+  ↓
+SAFE CANDIDATE SET (A5)
+  ↓
+STRATEGY POLICY (A6)
+  ↓
+MANAGED COMBO DESIRED STATE (A7)
+  ↓
+RECONCILIATION PLAN (A7)
+  ↓
+future controlled APPLY (not built)
+  ↓
+OMNIROUTE EXECUTION
+```
+
+JARVIS OWNS DESIRED ROUTING INTENT. OMNIROUTE OWNS ROUTING EXECUTION.
+
+### 1. Existing Combo persistence architecture (audited, not duplicated)
+
+Table `combos`: `id` (uuid PK), `name`, `data` (the full JSON record), `sort_order`,
+`created_at`, `updated_at`, `context_cache_protection` (a denormalized column mirroring a JSON
+field, for query performance). The `data` blob: `id`, `name`, `models: ComboStep[]`, `strategy`
+(default `"priority"`), `config: Record<string, unknown>` (free-form, strategy-specific —
+confirmed extensible: `normalizeComboRecord` spreads the input record and only touches
+`version`/`models`), `isHidden`, `sortOrder`, timestamps, `version: 2`. A `ComboModelStep` is
+`{ id, kind:"model", model (bare id), providerId, connectionId, allowedConnectionIds, weight,
+label, prompt, tags, fallbackOnlyOnQuotaExhaustion }` — this is the exact shape A7's
+`ManagedComboMember` maps onto.
+
+CRUD (`src/lib/db/repositories/sqliteComboRepository.ts`): `createCombo` (single INSERT, UUID
+generated if absent, validated via `validateComboInvariant`), `updateCombo` (read-merge-validate,
+single UPDATE; fields set to `null` are deleted), `reorderCombos` / `deleteCombo` (both wrapped
+in an explicit `db.transaction()`). Validation: `validateComboInvariant` (opt-in
+`allowedProviders`/`allowedModelFamilies` enforcement) plus Zod at the API boundary
+(`createComboSchema`). Runtime observes changes via `invalidateDbCache("combos")` on every write
+— the read-through cache re-reads on next lookup. **A7 calls none of this** — every function
+here stays purely descriptive.
+
+**No parallel Jarvis routing database was built.** A7 persists nothing; a future apply layer
+would write Jarvis's ownership metadata into the SAME `combo.config.jarvisManaged` bag the
+existing schema already supports, and membership into the SAME `combo.models` array every native
+strategy already reads (A5's own proof: every strategy sources its candidates from
+`resolveComboTargets()`, which reads `combo.models`).
+
+### 2. Managed Combo identity
+
+Mirrors an EXISTING precedent rather than inventing one:
+`src/lib/quota/quotaCombos.ts` already programmatically owns its own Combo rows, identified by a
+stable, prefixed NAME (`qtSd/<group>/<provider>/<model>` for the model-string side), upserted via
+`getComboByName` + `create`/`update`. A7's `buildManagedComboLogicalId(purpose)` follows the same
+shape for the COMBO itself: `jarvis-managed:<purpose>`. Redundantly, the logical id is also
+recorded inside `config.jarvisManaged.logicalId` (a future apply layer's write target), so
+ownership survives even if an operator renames the combo — the name-prefix and the
+config-recorded id are two independent signals, not one fragile one.
+
+### 3. Desired-state contract
+
+`buildManagedComboDesiredState(input): ManagedComboBuildResult` — pure, no DB, no routing call.
+Three outcomes, `kind` discriminated: NO_SAFE_ROUTE (nothing safe and nothing pending —
+terminal, mirrors A4 one layer up), ACTIVATION_REQUIRED (nothing routable, but candidates exist
+pending A3 activation — surfaced distinctly since the actionable next step differs), `DESIRED`
+(a full `ManagedComboDesiredState`: `logicalId`, `name`, `strategy`, `poolKind`, `policyMode`,
+`members`, `config`, `transientlySuppressed`, `evidenceFingerprint`, `activationRequiredCount`,
+`blockedCount`). `logicalId`/`activationRequiredCount`/`blockedCount` are hoisted onto every
+variant so a caller never needs to narrow on `kind` first just to read them.
+
+### 4. Ownership protection
+
+`planReconciliation` classifies `OwnershipStatus`: `unowned` (no combo at this identity yet),
+`jarvis-owned` (ownership metadata present and its `lastAppliedFingerprint` matches the combo's
+own current actual fingerprint), `drifted` (ownership metadata present but the actual fingerprint
+has moved — an operator edited it since Jarvis's last apply), `foreign` (a combo exists at this
+identity with no matching Jarvis ownership metadata at all — most likely a manually created
+combo). **`foreign` and `drifted` both force `blocked: true`** — the plan still computes what
+action WOULD be taken (for the audit trail / dashboard), but a future apply layer MUST refuse to
+act on a blocked plan. Default posture, per spec: report, fail closed — A7 does not decide
+whether Jarvis should ever auto-override operator drift.
+
+### 5. Candidate membership rules
+
+`members` is built EXCLUSIVELY from `safeSet.general` / `safeSet.strictZeroCost` (chosen by
+`policyMode`) — the exact same A5 structures A6 already consumes. A JARVIS_REJECTED candidate
+never has a code path into `members`: `toManagedComboMember` is only ever called on
+`SafeCandidateEntry` objects, which by A5's own construction are always Jarvis-approved.
+
+### 6. Strategy mapping
+
+A6's `CandidateStrategy` union (`priority`/`headroom`/`reset-window`/`p2c`/`least-used`/
+`context-optimized`/`cache-optimized`/`auto`) already names only real, A5-audited native
+strategies — mapping is direct, 1:1, no translation table needed. `recommendation.strategy ===
+null` (a fail-closed A6 empty-pool case) is defensively re-checked in A7 too and falls back to
+NO_SAFE_ROUTE rather than ever guessing a strategy — planning error, not silent default.
+
+### 7. AutoCombo safety (hard-tested)
+
+The real guarantee is NOT a `config.candidatePool` setting — it is that `buildManagedComboDesiredState`
+has **no code path that can ever see anything beyond the safe set it was handed**. A5's own audit
+already proved `expandAutoComboCandidatePool` only expands to the full provider catalog when
+`combo.models` is EMPTY; since A7 never produces an empty `members` array for a non-terminal
+`auto` recommendation, that expansion path is structurally unreachable. `config.candidatePool` is
+still set (the distinct provider ids in `members`) as defense-in-depth / self-documentation, not
+as the primary mechanism. Test O is the hard regression: a 3-candidate safe set with `auto`
+recommended produces exactly 3 members — the test's own comment notes a "400+ catalog" is
+deliberately never modeled, because there is no code path for it to reach.
+
+### 8. Reconciliation planner
+
+`planReconciliation({ desired, current }): ReconciliationPlan` — pure, read-only. Actions:
+NO_CHANGE, CREATE, UPDATE_MEMBERSHIP, UPDATE_STRATEGY, UPDATE_SETTINGS, DISABLE,
+DELETE_NOT_ALLOWED (reserved; A7 never emits it — automatic deletion is out of scope, matching
+§12's disable-not-delete rule). No write anywhere in this function.
+
+### 9. Idempotency
+
+Fingerprint equality is checked FIRST, before any diffing: `beforeFingerprint === afterFingerprint
+=> NO_CHANGE` unconditionally, regardless of how many times reconciliation runs (test G).
+`buildManagedComboDesiredState` and `planReconciliation` are both pure functions of their inputs
+— test F/R prove repeated/independent builds with identical evidence produce byte-identical
+results.
+
+### 10. Minimal-diff behavior
+
+When fingerprints differ, the plan computes `membershipAdded`/`membershipRemoved` (set difference
+by exact `providerId::connectionId::routeId` key) and `strategyChanged` independently, then picks
+ONE primary `action` label by precedence — membership first (the safety-critical dimension), then
+strategy, then settings — while still carrying the FULL diff in the plan object regardless of
+which single action won (test H: adding one member yields UPDATE_MEMBERSHIP with exactly that
+one member in `membershipAdded`, nothing else touched).
+
+### 11. Transient vs. persistent removal (reuses A4 semantics)
+
+`TRANSIENT_REJECTION_REASONS` (COOLDOWN_ACTIVE, RATE_LIMITED, QUOTA_EXHAUSTED,
+PROVIDER_HEALTH_FAILURE) mirrors A4's own `TRANSIENT_FAILURE_KINDS` concept one layer up, for
+candidate-rejection reasons instead of route-failure kinds. A previous member that falls out of
+the live safe set for one of these reasons is KEPT in `members` (native OmniRoute's own
+per-target pre-dispatch gate — A5's own audit — already skips it live regardless of Combo
+membership) and reported separately in `transientlySuppressed`; a member excluded for any other
+reason (proven incompatible, administratively disabled, cost-unsafe, connection gone, …) is
+dropped from `members` outright (test I vs. test J).
+
+### 12. Activation boundary
+
+A pending-activation candidate is never in `members` (§5's construction already guarantees this
+structurally) but its count is always visible via `activationRequiredCount`, and when NOTHING
+routable exists but something is pending, the result is the distinct ACTIVATION_REQUIRED kind
+rather than a bare NO_SAFE_ROUTE (test K/K2) — no bypass of A3.
+
+### 13. Connection isolation
+
+`ManagedComboMember`/membership keys always include `connectionId`; a safe connection A and an
+unsafe connection B of the exact same provider/model never merge into one membership decision
+(test L) — inherited directly from A5's own per-connection safe-set keying, not re-derived.
+
+### 14. Evidence fingerprint
+
+`computeEvidenceFingerprint({ members, strategy, policyMode, config })` — sorts members by a
+stable key before hashing (order-independent), canonicalizes to JSON, hashes with a small
+dependency-free FNV-1a (32-bit, hex) — a change-detector and audit trail, not a security
+boundary, so `node:crypto` would be unnecessary weight for the same guarantee. No secret, prompt,
+or upstream response body ever enters the input.
+
+### 15. Atomicity design (audit, no new write path)
+
+The existing `createCombo`/`updateCombo` are each a single synchronous `better-sqlite3` statement
+— inherently atomic per call (no interleaving within one Node process); `reorderCombos` and
+`deleteCombo` already use an explicit `db.transaction()` for their necessarily multi-statement
+work. **A future apply layer should reuse `updateCombo` (single statement, already atomic) for
+every A7-planned mutation** — UPDATE_MEMBERSHIP/UPDATE_STRATEGY/UPDATE_SETTINGS/DISABLE
+are all single-record replacements of the full `data` blob, which is exactly what `updateCombo`
+already does atomically. No raw DB transaction code is introduced by A7; none is needed beyond
+what already exists.
+
+### 16. Rollback design (design only)
+
+Before an apply: read the current combo via the existing `getComboById`/`getComboByName` (already
+atomic reads) and keep it in memory. If the apply's own post-write validation fails, restore by
+calling `updateCombo` again with the captured previous `data` — the same normal write path, never
+a raw DB rollback. Because `updateCombo` is already a single atomic statement, "restore" is not a
+special code path, it is the identical write operation run with the old payload.
+
+### 17. Restart recovery
+
+No A7-internal state exists to lose. `buildManagedComboDesiredState` is a pure function of
+current A2/A3/A4/A5/A6 outputs; a restarted Jarvis reconstructs the exact same desired state by
+recomputing observations → evidence → activation → safe set → strategy → desired state fresh
+(test R). The only thing NOT reconstructible from scratch is `previousMembers` (needed solely for
+the transient-suppression rule, §11) — a future apply layer should read that off the CURRENT live
+combo's own `members`, not persist it redundantly anywhere Jarvis-side.
+
+### 18. Status / observability
+
+`buildManagedComboStatus(desired, plan): ManagedComboStatus` — `logicalId`, `comboId`,
+`ownership`, `policyMode`, `strategy`, `candidateCount`, `currentFingerprint`,
+`desiredFingerprint`, `driftStatus` (`in-sync`/`pending-change`/`drifted`/`foreign`/`unowned`),
+`reconciliationAction`, `blocked`, `activationRequiredCount`, `blockedCount`. Flat, small, no
+prompt or credential ever included.
+
+### 19. Strict-zero-cost example (spec §22, tested)
+
+20 observed → 6 READY → 3 strict-safe. A7's desired state for the strict pool contains exactly
+those 3, strategy as A6 recommends (e.g. `reset-window`) — the other 17 have no code path into
+`members` regardless of how they are observed (test C/D, and the real-fixture test Q below).
+
+### 20. General-routing example (spec §23, tested)
+
+OpenRouter's real `cohere/north-mini-code:free` is eligible for the GENERAL managed Combo while
+absent from the STRICT_ZERO_COST managed Combo for the exact same safe set — proven with genuine
+A2/A3 evidence flowing through A5 into A7 (test P mirrors this with a synthetic pair; the doc's
+own Example B from A5 already proved the underlying evidence divergence with the real fixture).
+
+### 21. NVIDIA example (spec §24, real fixture)
+
+Test Q runs NVIDIA's real 82-model live catalog fixture through A2 → A3 → A5 → A7 end to end:
+`buildManagedComboDesiredState` produces exactly the 3 known-`claudeCodeEligible:true` members
+(`moonshotai/kimi-k3`, `deepseek-v4-pro-0813`, `deepseek-v4-flash-0731`) — the other 79 unknown
+observations never appear, proving **observation != routing** all the way through to the
+Combo-shaped output.
+
+### Explicitly out of scope for A7
+
+- No Combo create/update/delete call anywhere — every function in `src/lib/failover/managedCombo*.ts`
+  returns a plain value.
+- No managed-Combo apply layer — `planReconciliation`'s output is read-only planning data; "future
+  controlled apply" is explicitly the next, unbuilt phase.
+- No decision on whether Jarvis should ever auto-resolve operator drift — always reported,
+  always blocked, by design.
+- No provider/inference request, no Auto-Sync, no model import, no runtime route switch.
+
 ### O9 typecheck coverage gate (`check:o9-typecheck`)
 
 Building A7 surfaced a real gap: `npm run typecheck:core`'s `tsconfig.typecheck-core.json` uses
