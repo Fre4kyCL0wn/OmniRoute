@@ -298,7 +298,7 @@ test("hard exclusion before strategy: auto-combo-like scoring (real scorePool/ge
       errorRate: 0.05,
     },
   ];
-  const report = dryRunNativeStrategy({
+  const report = dryRunNativeStrategy<ProviderCandidate>({
     pool,
     identity: providerCandidateIdentity,
     safeSet,

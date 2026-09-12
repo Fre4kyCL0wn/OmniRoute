@@ -241,6 +241,7 @@
     "typecheck:noimplicit:core": "tsc --pretty false -p tsconfig.typecheck-noimplicit-core.json",
     "check:dashboard-typecheck": "node scripts/check/check-dashboard-typecheck.mjs",
     "check:open-sse-typecheck": "node scripts/check/check-open-sse-typecheck.mjs",
+    "check:o9-typecheck": "node scripts/check/check-o9-typecheck.mjs",
     "check:ts7-diagnostics-ratchet": "node scripts/check/check-ts7-diagnostics-ratchet.mjs",
     "backfill-aggregation": "node --import tsx src/scripts/backfillAggregation.ts",
     "env:sync": "node scripts/dev/sync-env.mjs",

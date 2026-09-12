@@ -132,8 +132,12 @@ export interface NativeStrategyDryRunInput<T> {
   safeSet: JarvisSafeCandidateSet;
   poolKind: SafeCandidatePool;
   strategy: NativeStrategyName;
-  /** `headroom`: real saturation signal per key (reuses the native `HeadroomSaturation` shape). */
-  headroomSaturationByKey?: ReadonlyMap<string, HeadroomSaturation>;
+  /**
+   * `headroom`: real saturation signal per key (reuses the native `HeadroomSaturation` shape).
+   * Mutable `Map` to match the real `rankByHeadroom` signature exactly — never mutated here,
+   * only read via `.get()`.
+   */
+  headroomSaturationByKey?: Map<string, HeadroomSaturation>;
   /** `headroom` / `reset-window`: key an item is looked up by; defaults to its `connectionId` (falling back to `routeId`). */
   keyOf?: (item: T) => string;
   /** `reset-window`: raw quota snapshot per key, passed straight to the real `getResetWindowRemainingMs`. */

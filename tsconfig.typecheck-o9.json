@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false
+  },
+  "include": [
+    "src/lib/failover/**/*.ts",
+    "src/lib/providerOnboarding/**/*.ts",
+    "src/lib/db/providerActivationApprovals.ts",
+    "tests/unit/providerOnboardingNvidiaA2.test.ts",
+    "tests/unit/providerActivationGateA3.test.ts",
+    "tests/unit/autonomousFailoverA4.test.ts",
+    "tests/unit/nativeComboIntegrationA5.test.ts",
+    "tests/unit/strategyPolicyEngineA6.test.ts",
+    "tests/unit/managedComboOrchestrationA7.test.ts"
+  ]
+}

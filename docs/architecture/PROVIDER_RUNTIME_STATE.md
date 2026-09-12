@@ -1904,3 +1904,38 @@ re-evaluation (loops back to safe candidate set / strategy recommendation)
   not (and structurally cannot, being a pure recommender) enforce it at execution time.
 - No competing task/intent classifier — `RequestClassFacts.taskType` mirrors the existing
   `mapIntentToTaskType` 3-way bucket exactly; A6 never parses a prompt itself.
+
+### O9 typecheck coverage gate (`check:o9-typecheck`)
+
+Building A7 surfaced a real gap: `npm run typecheck:core`'s `tsconfig.typecheck-core.json` uses
+an explicit `files` allowlist that has never included any A2–A7 file — every prior "typecheck
+PASS" in this initiative was accurate for that gate but never actually exercised this code under
+`tsc`. A first unrestricted check (a scratch project config) found and this session fixed two
+genuine A7 authoring bugs (a discriminated-union field present on only two of three variants) and
+one pre-existing A5 typing gap (`nativeComboBridge.ts`'s `headroomSaturationByKey` declared
+`ReadonlyMap` where the real `rankByHeadroom` requires a mutable `Map`), plus one test-file
+generic-inference fix — all now clean.
+
+Rather than widen the curated `typecheck:core` allowlist (a different, narrower-purpose gate —
+see `docs/architecture/QUALITY_GATES.md`'s own description of its 27-file allowlist), the fix
+follows this repo's OWN established pattern for exactly this situation:
+`check-api-typecheck.mjs` / `check-open-sse-typecheck.mjs` already scope `tsc` to one subtree and
+diff against a frozen per-file/per-TS-code baseline
+(`scripts/check/typecheckBaseline.mjs`). `check:o9-typecheck`
+(`scripts/check/check-o9-typecheck.mjs`, `tsconfig.typecheck-o9.json`) is the same pattern applied
+to the O9 A2–A7 scope: `src/lib/providerOnboarding/**`, `src/lib/failover/**`,
+`src/lib/db/providerActivationApprovals.ts`, and their six focused test files. It reuses the
+SAME shared baseline-diff helper the other two gates already use — no new comparison logic.
+
+Three unrelated, pre-existing errors are frozen in `config/quality/o9-typecheck-baseline.json`,
+each verified via `git log` to predate this session and this diff entirely:
+`open-sse/services/autoCombo/connectionBilling.ts` (last touched in the P4-B evidence commit),
+`open-sse/services/providerRuntimeState.ts` (last touched in the D0 FCC-integration commit), and
+`src/lib/providerOnboarding/catalog.ts` (A2, `7b59ee597`, several phases before this session). The
+first two are ALSO already-failing regressions in the pre-existing, independent
+`check:open-sse-typecheck` gate (23 regressions on this same worktree, none of them O9-F3.5
+A2–A7 files — they trace to the earlier O9-F1/O9-F3 phases) — corroborating, via a second,
+unrelated repo mechanism, that this debt is base-red and not something A2–A7 introduced. None of
+the three is fixed here, per Hard Rule discipline against opportunistic unrelated fixes; the
+baseline exists precisely so a FUTURE fix to any of them ratchets the gate down
+(`--update`) instead of being silently absorbed.
