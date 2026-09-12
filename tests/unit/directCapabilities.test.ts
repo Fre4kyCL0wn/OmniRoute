@@ -157,12 +157,13 @@ test("every curated provider is in the direct-provider pool", () => {
   }
 });
 
-test("direct provider pool contains the P1/P2 roadmap providers", () => {
+test("direct provider pool contains the P1/P2 roadmap providers plus judgement-only openrouter (P4-H2)", () => {
   assert.deepEqual([...DIRECT_CAPABILITY_PROVIDERS].sort(), [
     "cerebras",
     "gemini",
     "groq",
     "nvidia",
+    "openrouter",
   ]);
 });
 

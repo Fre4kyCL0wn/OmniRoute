@@ -2,10 +2,12 @@
  * O9-F3.4 P4-C — Claude Code compatibility evidence expansion for zero-cost
  * candidates. The audit added no new facts: no OpenRouter or self-hosted model
  * meets the D4.1 contract (model-specific tool-calling fact + the generically
- * tested Claude translator pair + no known fatal conflict). The one later
- * change is groq/openai/gpt-oss-120b, promoted by P4-E live Shadow evidence
- * (see groqLiveEvidenceP4e.test.ts). These tests pin that outcome so a future
- * seed cannot slip in without evidence.
+ * tested Claude translator pair + no known fatal conflict). The later changes
+ * are groq/openai/gpt-oss-120b (P4-E, a registry model) and
+ * openrouter/cohere/north-mini-code:free (P4-H2, a live-catalog model with a
+ * curated exact-model fact, so it is not part of the registry counts below),
+ * each promoted by its own live Shadow evidence. These tests pin that outcome
+ * so a future seed cannot slip in without evidence.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -48,12 +50,9 @@ test("free does not imply Claude compatibility: unproven Groq recurring-free mod
   }
 });
 
-test("free does not imply Claude compatibility: OpenRouter free entries stay null", () => {
-  for (const model of [
-    "cohere/north-mini-code:free",
-    "stealth/ox-alpha",
-    "liquid/lfm-2.5-2.6b:free",
-  ]) {
+test("free does not imply Claude compatibility: unproven OpenRouter free entries stay null", () => {
+  // cohere/north-mini-code:free is also free but is true from its own P4-H2 live evidence.
+  for (const model of ["stealth/ox-alpha", "liquid/lfm-2.5-2.6b:free"]) {
     const c = caps("openrouter", model);
     assert.equal(c.verifiedFree, true, `openrouter/${model} verifiedFree`);
     assert.equal(c.claudeCodeEligible, null, `openrouter/${model}`);
@@ -118,7 +117,7 @@ test("registry-wide verdicts are exactly the D4.1 set plus the P4-E Groq model: 
   );
 });
 
-test("zero-cost intersection: the four recurring-free Gemini models plus groq/openai/gpt-oss-120b", () => {
+test("zero-cost intersection (registry models): the four recurring-free Gemini models plus groq/openai/gpt-oss-120b", () => {
   assert.deepEqual(
     registryVerdicts((c) => c.verifiedFree === true && c.claudeCodeEligible === true),
     [
@@ -129,4 +128,7 @@ test("zero-cost intersection: the four recurring-free Gemini models plus groq/op
       "groq/openai/gpt-oss-120b",
     ]
   );
+  // Outside the registry: the curated live-catalog OpenRouter model (P4-H2).
+  const north = caps("openrouter", "cohere/north-mini-code:free");
+  assert.equal(north.verifiedFree && north.claudeCodeEligible, true);
 });

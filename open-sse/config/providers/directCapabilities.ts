@@ -15,7 +15,10 @@
  *   2. Static base — the provider `RegistryModel` (registry toolCalling /
  *      supportsReasoning / supportsVision / contextLength / maxOutputTokens)
  *      then the static `ModelSpec` (MODEL_SPECS) for the model id (or its
- *      leaf, for path-shaped ids).
+ *      leaf, for path-shaped ids). For `toolCalling` only, an exact curated
+ *      `DIRECT_MODEL_FACTS` entry sits between the two: it covers live-catalog
+ *      models of pass-through providers that are deliberately NOT static
+ *      registry rows (a registry row would also enter AutoCombo/quota pools).
  *   3. Curated judgement — `DIRECT_PROVIDER_JUDGEMENTS` (see
  *      directCapabilities.data.ts): hand-set facts with `// evidence:`
  *      citations that no source derives automatically.
@@ -37,12 +40,13 @@ import {
 } from "@omniroute/open-sse/config/freeModelCatalog.ts";
 
 import { getRegistryEntry } from "../providerRegistry.ts";
-import { DIRECT_PROVIDER_JUDGEMENTS } from "./directCapabilities.data.ts";
+import { DIRECT_MODEL_FACTS, DIRECT_PROVIDER_JUDGEMENTS } from "./directCapabilities.data.ts";
 import type { RegistryModel } from "./shared.ts";
 
 export {
   DIRECT_CAPABILITY_CURATED_AT,
   DIRECT_CAPABILITY_PROVIDERS,
+  DIRECT_MODEL_FACTS,
   DIRECT_PROVIDER_JUDGEMENTS,
 } from "./directCapabilities.data.ts";
 
@@ -153,18 +157,28 @@ interface StaticCapabilityFacts {
   maxOutputTokens: number | null;
 }
 
+/** Curated `DIRECT_MODEL_FACTS` entry: exact provider + exact model id only. */
+function curatedModelFact(providerId: string, modelId: string) {
+  // No prefix, family or suffix matching.
+  if (!Object.prototype.hasOwnProperty.call(DIRECT_MODEL_FACTS, providerId)) return undefined;
+  const byModel = DIRECT_MODEL_FACTS[providerId];
+  return Object.prototype.hasOwnProperty.call(byModel, modelId) ? byModel[modelId] : undefined;
+}
+
 /**
- * Resolve capability facts from the two DB-free static layers only: the
- * provider registry (`RegistryModel`) then the static `ModelSpec`. The
- * runtime/synced/override layers are intentionally NOT read here (SQLite cold
- * path) — callers enrich via `extractProviderModelInfo`.
+ * Resolve capability facts from the DB-free static layers only: the provider
+ * registry (`RegistryModel`), an exact curated `DIRECT_MODEL_FACTS` entry
+ * (`toolCalling` only), then the static `ModelSpec`. The runtime/synced/override
+ * layers are intentionally NOT read here (SQLite cold path) — callers enrich
+ * via `extractProviderModelInfo`.
  */
 function staticCapabilityFacts(providerId: string, modelId: string): StaticCapabilityFacts {
   const registryModel = findRegistryModel(providerId, modelId);
   const spec = findStaticSpec(modelId);
+  const curated = curatedModelFact(providerId, modelId);
   return {
     registryModel,
-    toolCalling: registryModel?.toolCalling ?? spec?.supportsTools ?? null,
+    toolCalling: registryModel?.toolCalling ?? curated?.toolCalling ?? spec?.supportsTools ?? null,
     supportsReasoning: registryModel?.supportsReasoning ?? spec?.supportsThinking ?? null,
     supportsThinking: spec?.supportsThinking ?? null,
     supportsVision: registryModel?.supportsVision ?? spec?.supportsVision ?? null,

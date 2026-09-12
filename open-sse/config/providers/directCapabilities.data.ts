@@ -46,7 +46,9 @@
 // `toolCalling: false`) — never for merely-missing evidence.
 // O9-F3.4 P4-E: a live Shadow tool roundtrip counts as a per-model fact once
 // it is recorded in the registry; groq/openai/gpt-oss-120b is the first (and
-// only) Groq model seeded this way.
+// only) Groq model seeded this way. O9-F3.4 P4-H2: for a pass-through
+// provider's live-catalog model the same fact is recorded in the exact-model
+// DIRECT_MODEL_FACTS map instead, so no static registry row is added.
 import type { DirectProviderJudgement } from "./directCapabilities.ts";
 
 /** Date this capability seed was last curated against provider documentation. */
@@ -62,6 +64,9 @@ export const DIRECT_CAPABILITY_PROVIDERS: readonly string[] = [
   "cerebras",
   "gemini",
   "nvidia",
+  // O9-F3.4 P4-H2: judgement-only member. OpenRouter is an aggregator, so its
+  // judgements are exact-model entries backed by live evidence, never "*".
+  "openrouter",
 ];
 
 /**
@@ -177,5 +182,43 @@ export const DIRECT_PROVIDER_JUDGEMENTS: Record<
     "openai/gpt-oss-120b": { claudeCodeReady: false },
     // The other 8 registered NVIDIA models have no per-model toolCalling
     // fact in either layer and stay entirely unseeded.
+  },
+  openrouter: {
+    // OpenRouter is an aggregator: entries here are exact-model only, never a
+    // provider-wide "*" default, and never inherited by :free siblings, other
+    // Cohere models or the non-:free id.
+    //
+    // claudeCodeReady (O9-F3.4 P4-H2): live Shadow evidence for THIS model only.
+    // Per-model fact: curated DIRECT_MODEL_FACTS toolCalling=true (below) — the
+    // model is learned from OpenRouter's live catalog and is deliberately NOT a
+    // static registry row, so it does not enter AutoCombo or quota pools —
+    // from one fresh isolated Claude Code text run (exact text, end_turn) and
+    // one read-only Bash tool roundtrip (OpenRouter tool_calls, tool_result
+    // correlated by the same call id, continuation ended stop) — every row
+    // provider=openrouter, model=cohere/north-mini-code:free, same connection,
+    // no combo, no fallback; plus 57 earlier Claude-ingress calls (2026-09-09).
+    // Translator pair: format:"openai" -> claude-to-openai.ts / openai-to-claude.ts.
+    // No fatal conflict: reasoning_content mapped to thinking blocks, replayed
+    // thinking raised no error, max_tokens 32000 accepted. Not proof for other
+    // OpenRouter models, every protocol edge, billing safety or a hard stop.
+    "cohere/north-mini-code:free": { claudeCodeReady: true },
+  },
+};
+
+/**
+ * Curated exact-model capability facts for models that are NOT static registry
+ * rows (O9-F3.4 P4-H2). Read only by `extractProviderModelInfo`, after the
+ * registry and before the static ModelSpec, for `toolCalling`. Exact provider +
+ * exact model id; no "*", no prefix, family or suffix matching. Every entry
+ * needs model-specific evidence — provider-wide support never qualifies.
+ */
+export const DIRECT_MODEL_FACTS: Readonly<
+  Record<string, Readonly<Record<string, { readonly toolCalling?: boolean }>>>
+> = {
+  openrouter: {
+    // evidence: live Shadow (O9-F3.4 P4-H2) — Claude Code tool_use -> OpenRouter
+    // tool_calls -> tool_result (same call id) -> continuation, plus OpenRouter
+    // endpoint metadata listing tools/tool_choice for this exact :free model.
+    "cohere/north-mini-code:free": { toolCalling: true },
   },
 };

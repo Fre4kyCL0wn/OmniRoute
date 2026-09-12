@@ -166,10 +166,10 @@ test("verifiedFree is null for a model with no free-catalog entry at all", () =>
 });
 
 test("verifiedFree does not imply or require claudeCodeEligible (independent sourcing)", () => {
-  // openrouter free models exist in the catalog but openrouter is entirely
-  // unseeded for claudeCodeReady (D4.1) — verifiedFree must not leak into it.
+  // liquid is a curated OpenRouter free model with no claudeCodeReady seed
+  // (only north-mini-code:free has one, from P4-H2) — verifiedFree must not leak into it.
   const caps = produceCapabilities(
-    extractProviderModelInfo("openrouter", "cohere/north-mini-code:free")
+    extractProviderModelInfo("openrouter", "liquid/lfm-2.5-2.6b:free")
   );
   assert.equal(caps.verifiedFree, true);
   assert.equal(caps.claudeCodeEligible, null);

@@ -63,7 +63,8 @@ test("D: the curated OpenRouter set is exactly three exact models; runtime :free
 });
 
 test("E: free-model evidence does not imply Claude-Code compatibility", () => {
-  const info = extractProviderModelInfo("openrouter", NORTH);
+  // north-mini-code:free is true from its own P4-H2 live evidence; liquid has none.
+  const info = extractProviderModelInfo("openrouter", "liquid/lfm-2.5-2.6b:free");
   const caps = produceCapabilities(info);
   assert.equal(info.toolCalling, null);
   assert.equal(caps.claudeCodeEligible, null);

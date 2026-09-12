@@ -857,6 +857,56 @@ reach; they are defense-in-depth, not billing proof.
 5. Optionally collect the `x-ratelimit-*` response headers as corroborating telemetry only — they
    are not authoritative tier evidence.
 
+## P4-H OpenRouter North Mini Code Evidence (O9-F3.4 P4-H1 / P4-H2)
+
+**P4-H1 (free evidence):** `openrouter/auto` was removed from `freeModelCatalog.data.ts`. It is
+OpenRouter's Auto Router, which picks the upstream model per request, paid models included, so
+no exact model is proven free; `verifiedFree` is now `null`. `cohere/north-mini-code:free` was
+added as `recurring-daily`: an explicit `:free` variant with one upstream endpoint (Cohere)
+priced $0 input and output. Only input and output price were checked.
+
+**P4-H2 (Claude-Code compatibility):** `openrouter/cohere/north-mini-code:free` is promoted to
+`claudeCodeEligible: true`. The model is learned from OpenRouter's live model catalog; its tool
+fact is an exact curated entry, `DIRECT_MODEL_FACTS.openrouter` (`toolCalling: true`), read only by
+`extractProviderModelInfo`, plus `DIRECT_PROVIDER_JUDGEMENTS.openrouter` with that single key — no
+`"*"` entry. It is intentionally **not** a static OpenRouter registry row: the static model list
+feeds AutoCombo's fallback pool and the quota-combo sync, and adding a row would have changed
+generic routing. OpenRouter joins `DIRECT_CAPABILITY_PROVIDERS` as a judgement-only member (that
+list has no runtime consumer).
+
+Fresh evidence, from an isolated Claude Code session against Shadow with an explicit
+`--model openrouter/cohere/north-mini-code:free`:
+
+| Check               | Result                                                                                                       |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Text                | Returned exactly the requested sentinel string; streamed; `finish_reason: stop` → Claude `end_turn`          |
+| Tool call           | One `Bash` `tool_use` with `{"command":"pwd"}`; `finish_reason: tool_calls`                                  |
+| Tool result         | `tool_result` with the same call id accepted; continuation ended `stop` with the correct directory           |
+| Provider / fallback | Every row `provider=openrouter`, `model=cohere/north-mini-code:free`, same connection; no combo, no fallback |
+| Reasoning           | `reasoning_content` mapped to thinking blocks; replayed thinking raised no error                             |
+| `max_tokens`        | Claude Code sent 32000; accepted (the model's maximum output is 64K)                                         |
+
+Supporting evidence: 57 earlier Claude-ingress calls for the same model in the Shadow call logs
+(2026-09-09), with streaming, tool calls and tool-result continuations.
+
+**Limits:** one fresh text run and one single-tool roundtrip, plus historical calls. This is
+evidence for this exact model only — not for other OpenRouter, Cohere or `:free` models, not for
+every protocol edge case, and not for billing: `connectionSafeForZeroCost` stays `null` and there
+is no `hardStopGuaranteed`, so the route stays `connection-safety-unknown`. OpenRouter free
+availability can change.
+
+**Counts:** registry verdicts stay 11 `true` / 1 `false` / 2673 `null` of 2685, because the model
+is not a registry row. Registry counts are not the same universe as every discoverable compatible
+model: outside the registry there is one curated live-catalog fact,
+`openrouter/cohere/north-mini-code:free = true`, which also makes it the only non-registry model in
+the effective free ∩ Claude-Code set. OpenRouter's static model list stays `auto` only, so no new
+AutoCombo fallback candidate or quota combo exists.
+
+**Deferred follow-up:** provider-observed OpenRouter zero-price evidence (exact `:free` ids only,
+never routers, every pricing field 0, freshness-tracked, revoked on disappearance or price change)
+on top of this curated baseline. Not implemented. Pinned by
+`tests/unit/openrouterFreeEvidenceP4h1.test.ts` and `tests/unit/openrouterNorthMiniP4h2.test.ts`.
+
 ## D5 FCC Preferred-Candidate Ranking Wiring (O9-F3.3P1-D5)
 
 D5 wires D0's already-built, already-tested `computeFccRankingSignal` (`fccRankingSignal.ts`) into
