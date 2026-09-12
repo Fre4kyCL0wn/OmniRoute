@@ -1447,3 +1447,255 @@ call with no A4-specific state to reset or migrate across a restart.
 - Ranking is deliberately simple and documented (health > quota > proven requirements match >
   provider diversity > capped external-score tiebreak) — it does not call into `combo.ts`'s live
   AutoCombo scoring engine, which is a large, side-effecting execution path, not a pure function.
+
+## Native OmniRoute Combo Strategy Integration (O9-F3.5 A5)
+
+A5 connects A2/A3/A4's evidence-based safety layer to the existing native Combo strategy
+engine — **without building a second router.** Core rule, unchanged from the spec:
+
+```
+JARVIS
+========
+OBSERVE (A2) -> EVIDENCE (A2) -> SAFETY (A2/A4 zero-cost) -> POLICY (A3)
+  -> HARD ELIGIBILITY (A4 RouteHardFacts) -> ACTIVATION (A3) -> SAFE CANDIDATE SET (A5)
+
+          ↓
+
+OMNIROUTE
+=========
+NATIVE COMBO STRATEGY (20 strategies) -> RETRY -> FALLBACK -> HEADROOM
+  -> RESET-AWARE ROUTING -> RESPONSE VALIDATION -> CACHE/CONTEXT OPTIMIZATION
+```
+
+**JARVIS CHOOSES WHO MAY PLAY. OMNIROUTE CHOOSES THE PLAY.**
+
+### 1. Native strategy inventory (source-verified, not UI names)
+
+The runtime source of truth is `open-sse/services/combo/strategyDispatch.ts`'s
+`HANDLED_COMBO_STRATEGIES` — 20 canonical strategies, each traced to real dispatch code:
+
+| Strategy                   | Dispatch                                                                                                                                                                                                                                                                                                                      | Shape                                                         |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `priority`                 | implicit — `resolveComboTargets()`'s own order, untouched                                                                                                                                                                                                                                                                     | reorder-free (the baseline order)                             |
+| `fill-first`               | `applyStrategyOrdering` (no-op branch — its own comment: "preserving priority order")                                                                                                                                                                                                                                         | same as priority                                              |
+| `weighted`                 | weighted step-group resolution in `combo/targetResolution.ts` (`resolveComboTargetPipeline`)                                                                                                                                                                                                                                  | reorder                                                       |
+| `round-robin`              | sticky round-robin state in `combo/rrState.ts`, consumed by the same pipeline                                                                                                                                                                                                                                                 | reorder                                                       |
+| `context-relay`            | handled inline in `combo.ts`'s main loop (Codex session handoff)                                                                                                                                                                                                                                                              | reorder-free (priority order + handoff side-channel)          |
+| `strict-random` / `random` | `applyStrategyOrdering` (`getNextFromDeck` / `fisherYatesShuffle`)                                                                                                                                                                                                                                                            | reorder                                                       |
+| `p2c`                      | `applyStrategyOrdering` → `orderTargetsByPowerOfTwoChoices` (`combo/targetSorters.ts`)                                                                                                                                                                                                                                        | reorder                                                       |
+| `least-used`               | `applyStrategyOrdering` → `sortTargetsByUsage`                                                                                                                                                                                                                                                                                | reorder                                                       |
+| `cost-optimized`           | `applyStrategyOrdering` → `sortTargetsByCost` (+ optional manifest-routing premium filter)                                                                                                                                                                                                                                    | reorder                                                       |
+| `reset-aware`              | `applyStrategyOrdering` → `orderTargetsByResetAwareQuota` (`combo/quotaStrategies.ts`, pure math in `combo/quotaScoring.ts`)                                                                                                                                                                                                  | reorder, real quota snapshots                                 |
+| `reset-window`             | `applyStrategyOrdering` → `orderTargetsByResetWindow` (same quota-math leaf)                                                                                                                                                                                                                                                  | reorder, real quota snapshots                                 |
+| `headroom`                 | `applyStrategyOrdering` → `orderTargetsByHeadroom` (`combo/quotaStrategies.ts`, pure ranking in `combo/headroomRanking.ts::rankByHeadroom`)                                                                                                                                                                                   | reorder, real saturation signals                              |
+| `context-optimized`        | `applyStrategyOrdering` → `sortTargetsByContextSize`                                                                                                                                                                                                                                                                          | reorder                                                       |
+| `cache-optimized`          | `applyStrategyOrdering` → prompt-cache-affinity ordering                                                                                                                                                                                                                                                                      | reorder (+ target expansion)                                  |
+| `quota-share`              | `applyStrategyOrdering` → `selectQuotaShareTarget` (DRR + P2C in-flight + per-model bucket + per-connection concurrency)                                                                                                                                                                                                      | reorder + in-flight reservation                               |
+| `lkgp`                     | `applyStrategyOrdering` (move last-known-good to front)                                                                                                                                                                                                                                                                       | reorder                                                       |
+| `auto`                     | `resolveAutoStrategyOrder` (`combo/resolveAutoStrategy.ts`) → `buildAutoCandidates` + tool/context pre-filters + `scoreAutoTargets` / `selectAutoProvider` (`autoCombo/engine.ts`, 16-factor scoring, `autoCombo/scoring.ts`) or an explicit `routerStrategy.ts` router (`rules`/`score`/`cost`/`latency`/`sla-aware`/`lkgp`) | candidate-build + score, still sourced from `eligibleTargets` |
+| `fusion`                   | `tryFusionDispatch` (`combo/dispatchPrelude.ts`) → `handleFusionChat` (`fusion.ts`) — fan-out panel + judge synthesis                                                                                                                                                                                                         | fan-out, still sourced from `resolveComboTargets`             |
+| `pipeline`                 | `tryPipelineDispatch` (`combo/dispatchPrelude.ts`) → `handlePipelineChat` (`pipeline.ts`) — staged output→input chain                                                                                                                                                                                                         | staged, still sourced from `resolveComboTargets`              |
+
+**Every single one** — reorder, score, fan-out, or staged — draws its candidate universe from
+`resolveComboTargets()`'s output (directly, or via `eligibleTargets`/`buildAutoCandidates`'
+expansion of it). None of the 20 ever ADDS a candidate absent from that array; they only
+reorder, score, or select FROM it. This is the structural basis for §11's hard-exclusion proof.
+
+Connection/health/quota/rate-limit/reset awareness is **not** uniform per strategy — most of
+the 12 reordering strategies are quota/health-blind by design (pure ordering functions); the
+awareness lives in the SHARED pre-dispatch gate every strategy passes through (next section),
+not in each strategy's own ordering logic. `reset-aware`/`reset-window`/`headroom`/`quota-share`
+are the exceptions — they consume real quota/saturation snapshots directly.
+
+### 2. Priority / shared pre-dispatch gate + retry (source: `combo.ts::executeTarget`)
+
+Every strategy's ordered array is walked by ONE shared per-target function (`executeTarget`
+inside `handleComboChat`), not a per-strategy retry implementation. Before dispatch, in order:
+circuit breaker (OPEN → skip), provider cooldown, connection cooldown (persisted, re-checked
+before each retry), **request-scoped exhaustion sets** (`exhaustedProviders`,
+`exhaustedConnections` — the native equivalent of A4's `attemptedRouteIds`), model lockout,
+quota-exhaustion cutoff (opt-in, shared with `auto`'s own pool filter), quota-aware scheduling
+(`OMNIROUTE_QUOTA_AWARE_ROUTING`), credential gate, concurrency cap, admission lane. Then a
+retry loop (`maxRetries`/`retryDelayMs` per target) inside a GLOBAL attempt ceiling
+(`globalAttempts`/`maxGlobalAttempts` across every target and retry combined) that terminates
+the whole combo with `max_attempts_exceeded` rather than looping forever.
+
+**Failure → fallback decision** (source-verified, not assumed):
+
+| Failure                                                                                         | Falls over to next target?                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 429 / 5xx / network / timeout (transient)                                                       | Yes — classified by `checkFallbackError`, drives cooldown pacing only, never the fallback decision itself                                                                                                             |
+| Model-scoped 400 ("model not supported")                                                        | Yes, AND the model is locked for future requests (`isModelScoped400`)                                                                                                                                                 |
+| Context-overflow / param-validation 400 (`isContextOverflow400` / `isParamValidation400`)       | Yes — different models have different context/param limits                                                                                                                                                            |
+| **Genuinely body-specific 400** (malformed/invalid, NOT context/param/model-scoped)             | **No — combo stops immediately** ("#2101: Prevent infinite fallback loops... These should NOT stop the combo [list]... Wrapper words like 'invalid'/'bad request' still stop only when the text is NOT model-scoped") |
+| Input-bound failure (e.g. `context_length_exceeded`) against a homogeneous same-model remainder | No — short-circuits immediately, retrying would fail identically                                                                                                                                                      |
+| HTTP 200 + failed response-quality validation                                                   | Yes — treated exactly like an HTTP error (502)                                                                                                                                                                        |
+| Client disconnect (499)                                                                         | No — stops immediately, nothing to serve                                                                                                                                                                              |
+
+This is already exactly A4's `caller_error` vs route-failure distinction — implemented natively,
+via post-hoc HTTP-response-shape classification, strategy-agnostic (one shared function, not
+20 copies). **A5 does not reimplement any of this.**
+
+### 3. Response validation (source: `combo/responseValidation.ts` + `combo/validateQuality.ts`)
+
+`ResponseValidationConfig`: `forbiddenSubstrings`, `requiredSubstrings`, `minContentLength`,
+`jsonPathPredicates` (bounded dot/bracket path resolver, no regex, no eval). Confirmed:
+**HTTP 200 + a failing predicate DOES trigger fallback** — `combo.ts`'s shared success path
+calls `validateResponseQuality` before returning, and a failure is recorded as a first-class
+`kind: "quality"` outcome (`lastStatus = 502`), which the same shared retry/fallback logic
+above treats identically to a real HTTP error. Strategy-agnostic (every strategy passes
+through this same success-path check). **A5 does not reimplement substring/JSON-path
+validation** — it is pure, safe (no regex/no eval), and already OmniRoute-owned.
+
+### 4. A4 responsibility matrix
+
+| Responsibility                                                                                                                       | Classification            | Why                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider observation, evidence resolution, Claude compatibility, zero-cost safety, connection/account safety, activation eligibility | **KEEP_IN_JARVIS**        | No native equivalent exists — this is exactly A2/A3/A4's own domain                                                                                                                                                 |
+| Hard candidate gates (`RouteHardFacts`/`isHardEligible`)                                                                             | **KEEP_IN_JARVIS**        | Native strategies never gate on Claude-Code compatibility or zero-cost proof                                                                                                                                        |
+| NO_SAFE_ROUTE terminal decision                                                                                                      | **KEEP_IN_JARVIS**        | Only Jarvis knows when the SAFE set is empty                                                                                                                                                                        |
+| Current-route bias (`currentRouteFailure: "none"` short-circuit)                                                                     | **KEEP_IN_JARVIS**        | No native strategy refuses to switch merely because the current route is still healthy — they reorder unconditionally                                                                                               |
+| Activation handoff (ACTIVATION_REQUIRED vs SWITCH_TO)                                                                                | **KEEP_IN_JARVIS**        | Native code has no concept of "observed but not yet activated"                                                                                                                                                      |
+| Candidate ranking _within_ the safe set (headroom / reset-window / cost / quota-share)                                               | **DELEGATE_TO_OMNIROUTE** | Real, pure, already correct (§1); duplicating would be the "second router" this task forbids                                                                                                                        |
+| Retry execution, backoff, global attempt ceiling                                                                                     | **DELEGATE_TO_OMNIROUTE** | `executeTarget`'s shared loop already owns this — see §5                                                                                                                                                            |
+| Response validation (200-but-invalid)                                                                                                | **DELEGATE_TO_OMNIROUTE** | Real, safe, strategy-agnostic (§3)                                                                                                                                                                                  |
+| Failure classification for IN-REQUEST fallback pacing (429 vs 5xx vs body-specific 400 vs quality)                                   | **DELEGATE_TO_OMNIROUTE** | `checkFallbackError`/`isScopedFailure`/`isModelScoped400`/etc. are comprehensive and battle-tested; A4's own `RouteFailureKind` stays the trigger for Jarvis's OWN proactive decisions, a different layer (see §13) |
+| Loop / attempted-set tracking                                                                                                        | **SHARED_BOUNDARY**       | Native `exhaustedProviders`/`exhaustedConnections` own the IN-REQUEST loop; A4's `attemptedRouteIds` is the analogous concept one layer up, for Jarvis's own SAFE SET recomputation across requests — see §13       |
+| Provider diversity                                                                                                                   | **SHARED_BOUNDARY**       | A4 uses it as a minor score tiebreaker among already-safe candidates; native strategies never diversify on their own, but nothing here needs enforcing beyond "safety first" (§16 example)                          |
+| Quota/reset ranking, health ranking                                                                                                  | **DELEGATE_TO_OMNIROUTE** | Real pure leaves reused directly by A5's bridge, not duplicated (§2 of A5 "Pieces" below)                                                                                                                           |
+
+### 5. Safe candidate set (`src/lib/failover/jarvisSafeCandidateSet.ts`)
+
+`buildSafeCandidateSet(candidates: FailoverCandidate[])` reuses A4's own (now exported)
+`classifyCandidateRejection` — the exact function `evaluateFailoverDecision` itself calls — so
+the safe set and a live A4 decision can never drift apart on what counts as eligible. Two
+pools, `general` and `strictZeroCost` (always ⊆ `general` by construction, computed by calling
+the same rejection classifier twice — once under a non-cost-gated policy, once under
+`strict_zero_cost`), each split again by `activation`: `routable` (ALREADY_ROUTABLE — safe to
+feed a native strategy NOW) vs `pendingActivation` (READY_BUT_NOT_ACTIVATED — Jarvis-safe once
+activated, but structurally excluded from anything a native strategy could select — A4's
+ACTIVATION_REQUIRED handoff is not bypassed). No DB writes; pure function of the candidate
+array already in memory.
+
+### 6. Native strategy bridge (`src/lib/failover/nativeComboBridge.ts`)
+
+`filterToJarvisSafeCandidateSet(pool, identity, safeSet, poolKind)` — a pure, generic array
+filter. `identity` maps any native pool item (a `ResolvedComboTarget`, a `ProviderCandidate`, or
+any future shape) onto `{ providerId, routeId, connectionId }`; the filter keeps only members of
+the requested Jarvis pool, matching by exact `(provider, connection, route)` when the native
+item names a connection, or by `(provider, route)` — "at least one connection for this route is
+safe" — when it doesn't (a provider-wide auto-combo catalog expansion, resolved to a specific
+connection later by OmniRoute's own account-selection layer). This IS the hard-exclusion
+guarantee: every native strategy (§1) only reorders/scores/selects from the array it receives,
+so a route this filter removes cannot reappear downstream, structurally — not a runtime check
+any strategy could accidentally skip.
+
+`dryRunNativeStrategy` (A5 spec §18) filters, then applies one strategy's REAL ranking to the
+filtered subset only — `priority` (array order), `headroom` (imports and calls the real
+`rankByHeadroom`/`computeHeadroom`), `reset-window` (imports and calls the real
+`getResetWindowRemainingMs`), and `custom-score` (caller injects a scorer — tests inject the
+real `scorePool`/`getTaskFitness` for an `auto`-shaped proof). Read-only: no live routing, no
+provider request, no Combo mutation. `identity` adapters (`resolvedComboTargetIdentity`,
+`providerCandidateIdentity`) are pure field mappers, not behavior.
+
+### 7. Hard exclusion proof
+
+`tests/unit/nativeComboIntegrationA5.test.ts` proves, for `priority`, real `headroom`, real
+`reset-window`, and real-`scorePool`-backed `custom-score` (an `auto`-shaped stand-in): a
+Jarvis-rejected route is never `selected`, even when it would objectively win on the native
+metric alone (given full headroom / soonest reset / best score) — because it is removed from
+the array before that metric is ever evaluated. Also: rejected-route non-reappearance across
+duplicate pool entries, connection isolation (one unsafe connection of a route excluded while a
+sibling safe connection is kept), and provider diversity never overriding safety.
+
+### 8. General vs strict-zero-cost pools (A5 spec §17 examples, source-verified)
+
+- **Example A** (two safe Gemini connections + a Groq connection that is READY but
+  `connectionSafeForZeroCost` unresolved): Groq structurally cannot reach any native strategy
+  under `strictZeroCost` — proven directly against real evidence in the OpenRouter/NVIDIA tests
+  below, using the Groq-shaped case as the synthetic mirror (this repo has no A2 Groq
+  observation fixture; `OBSERVATION_CATALOG_PROVIDERS` is `nvidia`/`openrouter` only).
+- **Example B**: OpenRouter's real `cohere/north-mini-code:free` (A2/A3's own reference
+  candidate) — general pool: yes; strict pool: no (`connection-safety-unknown`, same
+  ACCOUNT_SAFETY_UNKNOWN reason A4 itself surfaces).
+- **Example C**: NVIDIA's 3 real known-`claudeCodeEligible:true` models — general pool: yes;
+  strict pool: no (cost status unresolved for the connection) — proven against the real A2
+  NVIDIA fixture, not a synthetic trial-credit stand-in.
+- **Example D**: a fully proven synthetic local-provider candidate (`executable`,
+  `claudeCodeEligible`, health all `true`, `strictZeroCostSafe: true`) participates in both
+  pools and is selectable via the native bridge — `local_zero_cost` alone was never used as the
+  sole proof; every hard fact is proven first.
+
+### 9. Retry / loop ownership boundary
+
+`combo.ts::executeTarget` (§2) is THE single authoritative IN-REQUEST attempt/retry loop —
+`globalAttempts`/`maxGlobalAttempts` and `exhaustedProviders`/`exhaustedConnections` already
+prevent runaway loops and route re-selection within one request. **A5 adds no second loop.**
+`nativeComboBridge.ts` and `jarvisSafeCandidateSet.ts` expose no retry/backoff surface at all
+(asserted directly by a dedicated test). A4's `attemptedRouteIds` operates one layer up and for
+a different purpose: it is the caller-owned, request-scoped set A4 itself never persists,
+informing Jarvis's own KEEP_CURRENT/SWITCH_TO/NO_SAFE_ROUTE decision (e.g. "don't propose a
+route we already tried this request") — not a mechanism that re-attempts anything itself. The
+two sets serve adjacent, non-overlapping layers: native exhaustion sets govern retries WITHIN
+one target's dispatch attempts; A4's attempted set governs which candidate Jarvis is willing to
+recommend switching to.
+
+### 10. Quota / cooldown boundary
+
+Jarvis authority governs hard route eligibility (fail-closed: an account-unsafe candidate is
+removed before any native ranking runs). Native quota/headroom/reset strategies optimize only
+among candidates that remain — confirmed by `headroomRanking.ts`'s own fail-OPEN default for a
+_missing_ saturation signal ("any missing / non-finite utilization is treated as 0 (full
+headroom)"): that default is fine precisely because it only ever ranks WITHIN an already
+Jarvis-approved set, never decides whether a route may play at all. Fail-open ranking and
+fail-closed eligibility are two different layers by design, not a contradiction.
+
+### 11. Observability
+
+`CandidateDisposition` (`jarvisSafeCandidateSet.ts`) is `{ kind: "JARVIS_REJECTED", reason }` or
+`{ kind: "JARVIS_APPROVED", pool, activation }`, keyed the same way native pool identity is
+matched. `dryRunNativeStrategy`'s report separates `jarvisRejectedCount` from
+`jarvisApprovedCount` and names `nativeSelectionReason` for whichever survivor won — the
+OMNIROUTE_NOT_SELECTED half of the distinction (an approved-but-not-chosen candidate) is
+reportable from the same dry-run result (every approved-but-not-`selected` entry), without A5
+inventing a second reason-code taxonomy for it. No prompt or secret is read or logged anywhere
+in A5.
+
+### 12. Future dynamic Combo management (design only — not implemented in A5)
+
+```
+Jarvis detects provider/model changes (A2 refresh)
+  ↓
+rebuilds safe candidate membership (A5 buildSafeCandidateSet)
+  ↓
+diffs against the managed Combo's current members (added / removed / unchanged)
+  ↓
+updates the managed Combo atomically (single native write, all-or-nothing)
+  ↓
+OmniRoute continues native strategy execution over the updated membership
+```
+
+Requirements for a future implementation: **idempotent** (re-running the same safe set against
+an unchanged Combo produces no write, mirroring A2's own `applyObservationRefresh` "unchanged →
+no write" contract); **connection-scoped** (never a provider-wide toggle — matches every A2/A3/A4
+invariant already in place); **no duplicate models** (dedupe by the same `NativePoolIdentity`
+key this module already defines); **safe removal** (a route leaving the safe set is removed from
+the managed Combo, never from the observation history — mirrors A2's "removed is never delete"
+rule for its own inventory); **no half-written Combo state** (a single atomic replace of the
+managed Combo's member list, never a partial multi-step mutation visible mid-write); **recoverable
+after restart** (the managed Combo's membership is always fully reconstructible by re-running
+`buildSafeCandidateSet` over current A2/A3/A4 state — nothing about WHY a route is a member needs
+its own persisted record, matching A4's own restart model). **Not implemented here** — A5 ships
+the pure decision/bridge layer only; no route, hook, UI, or job calls it, and no Combo is read,
+written, or activated anywhere in this phase.
+
+### Explicitly out of scope for A5
+
+- No native strategy execution — `dryRunNativeStrategy` never calls `handleComboChat` or any
+  live dispatch path.
+- No Combo persistence or activation, no `syncedAvailableModels` / `customModels` write.
+- No Auto-Sync re-enablement, no `observed == routable` shortcut anywhere in this module — the
+  safe set is built from A2/A3/A4 evidence exclusively.
+- No modification to `combo.ts` or any native strategy file — every reuse in A5 is an import of
+  an existing pure function (`rankByHeadroom`, `getResetWindowRemainingMs`, `scorePool` in
+  tests), never a copy or a fork.

@@ -295,11 +295,17 @@ function routeIdentity(candidate: FailoverCandidate): RouteIdentity {
  * `ATTEMPTED_ALREADY`), then administrative/connection/runtime-health facts,
  * then capability/cost. Hard gates always beat score — nothing here is a
  * preference, every branch is a disqualification.
+ *
+ * Exported (O9-F3.5 A5) so the Jarvis-safe-candidate-set builder
+ * (`src/lib/failover/jarvisSafeCandidateSet.ts`) reuses this exact
+ * eligibility logic instead of re-deriving it — the safe set and a live
+ * failover decision must never be able to drift apart on what counts as
+ * eligible.
  */
-function classifyCandidateRejection(
+export function classifyCandidateRejection(
   candidate: FailoverCandidate,
   input: FailoverDecisionInput,
-  now: number
+  now: number = Date.now()
 ): FailoverReason | null {
   if (input.attemptedRouteIds.has(candidate.routeId)) return "ATTEMPTED_ALREADY";
 
