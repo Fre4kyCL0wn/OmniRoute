@@ -112,7 +112,21 @@ export function normalizeObservedModels(
   return [...byId.values()];
 }
 
-function emptyInventory(providerId: string, connectionId: string, source: string) {
+/**
+ * Explicit return type (not inference-from-`satisfies`) is load-bearing: an
+ * inferred `models: []` literal narrows to `never[]`, which — merged with
+ * `previous: ProviderObservationInventory` at the `base = previous ? … :
+ * emptyInventory(…)` ternary below — silently widened `base.models`'s
+ * element type into a union `ProviderObservationRecord[] | never[]`. That
+ * broke `new Map(base.models.map(...))`'s tuple inference downstream (the
+ * root cause of this file's other diagnostics), never a runtime bug — the
+ * empty array's actual values were always correct.
+ */
+function emptyInventory(
+  providerId: string,
+  connectionId: string,
+  source: string
+): ProviderObservationInventory {
   return {
     providerId,
     connectionId,
@@ -146,7 +160,11 @@ export function applyObservationRefresh(
       : emptyInventory(providerId, connectionId, source);
 
   // Failed or degraded catalog: keep the last good models untouched.
-  if (!outcome.ok) {
+  // `outcome.ok === false` (not `!outcome.ok`): negation-based narrowing does
+  // not reliably discriminate this union in this TS configuration (verified
+  // in isolation) — the explicit literal comparison is the only form that
+  // actually narrows `outcome` to the `{ ok: false; reason }` member below.
+  if (outcome.ok === false) {
     return {
       ...base,
       lastAttemptAt: observedAt,

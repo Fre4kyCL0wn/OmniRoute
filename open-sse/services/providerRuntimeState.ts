@@ -318,6 +318,25 @@ function classifyCapabilities(
 }
 
 // ---------------------------------------------------------------------------
+// Quota Reset Classification
+// ---------------------------------------------------------------------------
+
+/**
+ * `FreeAccessState.resetAt` is an ISO-8601 string; `ProviderRuntimeState.quotaResetAt`
+ * is documented and typed as epoch-ms (same convention as `cooldownUntil` /
+ * `classifyCooldownUntil` below). Exported and unit-tested directly — unlike
+ * `classifyCooldownUntil`, `resolveFreeAccessState` has no integration-test
+ * seam to exercise this conversion end-to-end (its cache is keyed by a fixed
+ * real-provider allowlist, not injectable per test), so this stays a small,
+ * focused, independently-testable pure function.
+ */
+export function resolveQuotaResetAtMs(resetAt: string | null | undefined): number | null {
+  if (!resetAt) return null;
+  const parsed = new Date(resetAt).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+// ---------------------------------------------------------------------------
 // Cooldown Classification
 // ---------------------------------------------------------------------------
 
@@ -500,7 +519,7 @@ export async function getProviderRuntimeState(
     cbStatus?.retryAfterMs
   );
 
-  const quotaResetAt = freeAccessState?.resetAt ?? null;
+  const quotaResetAt = resolveQuotaResetAtMs(freeAccessState?.resetAt);
 
   const costClass = classifyCostClass(billingVerdict, provider, model);
 

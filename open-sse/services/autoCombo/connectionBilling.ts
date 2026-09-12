@@ -148,7 +148,11 @@ export function parseConnectionBillingEvidence(
     return null;
   }
   return {
-    billingLinked,
+    // Same reasoning as `observedAt` below: the guard above already proves
+    // `billingLinked` is `boolean | null` at runtime, but TS does not narrow
+    // a destructured `unknown` through an early-return `typeof` guard here —
+    // an explicit re-check is required, not a cast.
+    billingLinked: typeof billingLinked === "boolean" ? billingLinked : null,
     origin: origin as ConnectionBillingEvidenceOrigin,
     observedAt: typeof observedAt === "string" ? observedAt : null,
   };

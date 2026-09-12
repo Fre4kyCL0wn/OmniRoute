@@ -683,6 +683,62 @@ describe("Provider Runtime State", () => {
       assert.ok((state.cooldownUntil as number) > Date.now());
     });
   });
+
+  describe("Test 12: quotaResetAt is converted from ISO string to epoch ms", () => {
+    it("returns a number, not the raw ISO string, when the free-access cache reports a resetAt", async () => {
+      const { getProviderRuntimeState } =
+        await import("../../open-sse/services/providerRuntimeState.ts");
+      const resetAtIso = new Date(Date.now() + 3_600_000).toISOString();
+      freeAccessTesting.cache.set("openrouter::conn-reset", {
+        state: {
+          status: "SAFE",
+          remainingFreeAllowance: 10,
+          resetAt: resetAtIso,
+          checkedAt: new Date().toISOString(),
+        },
+        fetchedAtMs: Date.now(),
+      });
+
+      const state = await getProviderRuntimeState("openrouter", "conn-reset", "model", {
+        connection: {
+          id: "conn-reset",
+          provider: "openrouter",
+          authType: "apikey",
+          testStatus: "active",
+          isActive: true,
+        },
+      });
+
+      assert.equal(typeof state.quotaResetAt, "number");
+      assert.equal(state.quotaResetAt, new Date(resetAtIso).getTime());
+    });
+
+    it("stays null when the cache reports no resetAt (fail-closed, not 0/NaN)", async () => {
+      const { getProviderRuntimeState } =
+        await import("../../open-sse/services/providerRuntimeState.ts");
+      freeAccessTesting.cache.set("openrouter::conn-no-reset", {
+        state: {
+          status: "SAFE",
+          remainingFreeAllowance: 10,
+          resetAt: null,
+          checkedAt: new Date().toISOString(),
+        },
+        fetchedAtMs: Date.now(),
+      });
+
+      const state = await getProviderRuntimeState("openrouter", "conn-no-reset", "model", {
+        connection: {
+          id: "conn-no-reset",
+          provider: "openrouter",
+          authType: "apikey",
+          testStatus: "active",
+          isActive: true,
+        },
+      });
+
+      assert.equal(state.quotaResetAt, null);
+    });
+  });
 });
 
 // Prove the provider-account event did NOT create per-model lockouts: the
