@@ -7,7 +7,6 @@ import {
 } from "@/shared/constants/providers";
 import { getRegistryEntry } from "@omniroute/open-sse/config/providerRegistry.ts";
 import { getModelsByProviderId } from "@/shared/constants/models";
-import { resolveAlibabaProviderModelsUrl } from "@/shared/constants/alibabaProviderRegions";
 import { getStaticModelsForProvider } from "@/lib/providers/staticModels";
 import { providerUsesCuratedModelsOnly } from "@/lib/providers/modelListingCapability";
 import { mergeModelsWithCustomPrecedence } from "@/lib/providers/modelMetadataPrecedence";
@@ -119,6 +118,10 @@ import {
   type ProviderModelsConfigEntry,
   PROVIDER_MODELS_CONFIG,
 } from "./discovery/providerModelsConfig";
+import {
+  fetchConfiguredProviderCatalog,
+  resolveConfiguredCatalogUrl,
+} from "./discovery/configuredCatalogFetch";
 import {
   buildCodexDiscoveryCatalog,
   enrichCodexModelsFromGithubCatalog,
@@ -613,9 +616,7 @@ export async function GET(
       try {
         const discovery = await discoverMaxaiModels({
           providerSpecificData: connection.providerSpecificData as
-            | Record<string, unknown>
-            | null
-            | undefined,
+            Record<string, unknown> | null | undefined,
           accessToken: apiKey || accessToken,
           fetchImpl: (url, init) =>
             safeOutboundFetch(url, {
@@ -2240,134 +2241,49 @@ export async function GET(
       );
     }
 
-    // Build request URL
-    let url = config.url;
-    if (provider === "alibaba" || provider === "alibaba-cn" || provider === "qwen-cloud") {
-      url = resolveAlibabaProviderModelsUrl(
-        provider,
-        connection.providerSpecificData,
-        config.url.replace(/\/models\/?$/, "")
-      );
+    // Build the request URL, then fetch + parse every page (pagination for
+    // providers that use nextPageToken, e.g. Gemini). The shared fetcher never
+    // persists; persisting stays below in buildApiDiscoveryResponse.
+    const resolvedCatalogUrl = resolveConfiguredCatalogUrl(provider, config, connection);
+    if (!resolvedCatalogUrl.ok) {
+      return NextResponse.json({ error: resolvedCatalogUrl.error }, { status: 400 });
     }
-    // VibeProxy: honor a user-configured custom base URL for the built-in
-    // `openai` provider (e.g. an OpenAI-compatible gateway / proxy). Without
-    // this, model discovery always hit the hardcoded api.openai.com and ignored
-    // the configured endpoint — returning the wrong catalog (or failing auth)
-    // for gateway users, and preventing instant access to gateway-served models.
-    // Falls back to config.url (api.openai.com) when no custom base URL is set.
-    if (provider === "openai") {
-      const customBaseUrl = getProviderBaseUrl(connection.providerSpecificData);
-      if (customBaseUrl) {
-        let base = customBaseUrl.replace(/\/$/, "");
-        if (base.endsWith("/chat/completions")) {
-          base = base.slice(0, -"/chat/completions".length);
-        } else if (base.endsWith("/completions")) {
-          base = base.slice(0, -"/completions".length);
-        }
-        // Strip a trailing /v1 unconditionally (same #5899 double-prefix guard as the
-        // discovery path above): a customBaseUrl like ".../v1/chat/completions" would
-        // otherwise leave base as ".../v1" and produce ".../v1/v1/models" below.
-        if (base.endsWith("/v1") && !base.endsWith("://v1")) {
-          base = base.slice(0, -"/v1".length);
-        }
-        url = `${base}/v1/models`;
-      }
-    }
-    if (provider === "cloudflare-ai") {
-      const pData = asRecord(connection.providerSpecificData);
-      const accountId =
-        (typeof pData.accountId === "string" && pData.accountId) ||
-        process.env.CLOUDFLARE_ACCOUNT_ID;
-      if (!accountId) {
-        return NextResponse.json(
-          { error: "Cloudflare Workers AI requires an Account ID in provider settings." },
-          { status: 400 }
-        );
-      }
-      url = url.replace("{accountId}", accountId);
-    }
-    const paginationBaseUrl = url;
-    if (config.authQuery) {
-      url += `${url.includes("?") ? "&" : "?"}${config.authQuery}=${token}`;
-    }
-
-    // Build headers
-    const headers = config.buildHeaders
-      ? config.buildHeaders(token, connection)
-      : { ...config.headers };
-    if (!config.buildHeaders && config.authHeader && !config.authQuery) {
-      headers[config.authHeader] = (config.authPrefix || "") + token;
-    }
-
-    // Make request (with pagination for providers that use nextPageToken, e.g. Gemini)
-    const fetchOptions: any = {
-      method: config.method,
-      headers,
-    };
-
-    if (config.body && config.method === "POST") {
-      fetchOptions.body = JSON.stringify(config.body);
-    }
-
-    let allModels: any[] = [];
-    let pageUrl = url;
-    let pageCount = 0;
-    const MAX_PAGES = 20; // Safety limit
-    const seenTokens = new Set<string>();
-
-    while (pageUrl && pageCount < MAX_PAGES) {
-      pageCount++;
-      let response: Response;
-      try {
-        response = await safeOutboundFetch(pageUrl, {
+    const catalog = await fetchConfiguredProviderCatalog({
+      provider,
+      config,
+      url: resolvedCatalogUrl.url,
+      token,
+      connection,
+      fetchPage: (pageUrl, init) =>
+        safeOutboundFetch(pageUrl, {
           ...SAFE_OUTBOUND_FETCH_PRESETS.modelsPagination,
           guard: getProviderOutboundGuard(),
           proxyConfig: proxy,
           // Ollama Cloud /v1/models returns 301 redirects (#1381)
           ...(provider === "ollama-cloud" ? { allowRedirect: true } : {}),
-          ...fetchOptions,
-        });
-      } catch (error) {
-        const fallback = buildDiscoveryErrorFallbackResponse(error);
+          ...init,
+        }),
+    });
+    if (catalog.ok === false) {
+      if (catalog.kind === "network") {
+        const fallback = buildDiscoveryErrorFallbackResponse(catalog.error);
         if (fallback) return fallback;
-        throw error;
+        throw catalog.error;
       }
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.log("Error fetching models from provider", { provider, errorText });
-        const fallback = buildDiscoveryFallbackResponse();
-        if (fallback) return fallback;
-        return NextResponse.json(
-          { error: `Failed to fetch models: ${response.status}` },
-          { status: response.status }
-        );
-      }
-
-      const data = await response.json();
-      let pageModels = config.parseResponse(data);
-      if (provider === "alibaba" || provider === "alibaba-cn") {
-        const { parseAlibabaModelStudioModelsForConnection } =
-          await import("./discovery/providerModelsConfig.ts");
-        pageModels = parseAlibabaModelStudioModelsForConnection(
-          data,
-          connection.providerSpecificData as Record<string, unknown> | null | undefined
-        );
-      }
-      allModels = allModels.concat(pageModels);
-
-      const nextPageToken = data.nextPageToken;
-      if (!nextPageToken) break;
-      if (seenTokens.has(nextPageToken)) {
-        console.warn(`[models] ${provider}: duplicate nextPageToken detected, stopping pagination`);
-        break;
-      }
-      seenTokens.add(nextPageToken);
-      pageUrl = `${paginationBaseUrl}${paginationBaseUrl.includes("?") ? "&" : "?"}pageToken=${encodeURIComponent(nextPageToken)}`;
-      if (config.authQuery) {
-        pageUrl += `&${config.authQuery}=${token}`;
-      }
+      console.log("Error fetching models from provider", {
+        provider,
+        errorText: catalog.errorText,
+      });
+      const fallback = buildDiscoveryFallbackResponse();
+      if (fallback) return fallback;
+      return NextResponse.json(
+        { error: `Failed to fetch models: ${catalog.status}` },
+        { status: catalog.status }
+      );
     }
+    const allModels: any[] = catalog.models;
+    const paginationBaseUrl = catalog.paginationBaseUrl;
+    const pageCount = catalog.pageCount;
 
     if (pageCount > 1) {
       console.log(

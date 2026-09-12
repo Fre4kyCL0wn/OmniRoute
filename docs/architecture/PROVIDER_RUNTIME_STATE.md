@@ -1135,3 +1135,97 @@ with:
 
 **P1 is NOT approved yet.** No statement here implies Groq / Cerebras / Gemini / NVIDIA are
 already integrated.
+
+## Provider Observation Inventory (O9-F3.5 A2)
+
+Core rule: **observe everything, route selectively.**
+
+```
+PROVIDER
+  ↓
+PURE FETCH/PARSE            (discovery/configuredCatalogFetch.ts — shared with the native /models route)
+  ↓
+OBSERVATION INVENTORY       (key_value namespace "providerObservedModels", one row per connection)
+  ↓
+EVIDENCE RESOLUTION         (src/lib/providerOnboarding/evidence.ts)
+  ↓
+READY / VALIDATION_REQUIRED / KNOWN_INCOMPATIBLE / HIDDEN
+  ↓
+SEPARATE ACTIVATION POLICY  (not part of A2)
+  ↓
+SYNCED / CUSTOM / ROUTING
+```
+
+These sets stay distinct: observed ≠ synced ≠ custom ≠ routable ≠ AutoCombo-eligible ≠
+Claude-compatible ≠ verified-free ≠ zero-cost-eligible. An observation alone has no routing
+effect.
+
+### Pieces
+
+- `fetchConfiguredProviderCatalog` / `resolveConfiguredCatalogUrl`
+  (`src/app/api/providers/[id]/models/discovery/configuredCatalogFetch.ts`): the generic
+  `PROVIDER_MODELS_CONFIG` request + pagination + provider parser, extracted from the native
+  `/api/providers/[id]/models` route, which now calls it too. It never persists.
+- `refreshConnectionObservations`
+  (`src/app/api/providers/[id]/models/discovery/providerObservationRefresh.ts`): callable
+  refresh for one connection, opt-in per provider (`OBSERVATION_CATALOG_PROVIDERS`: `nvidia`,
+  `openrouter`). Not wired to any route, hook or timer.
+- `applyObservationRefresh` (`src/lib/providerOnboarding/catalog.ts`): refresh semantics.
+- `getProviderObservationInventory` / `saveProviderObservationInventory`
+  (`src/lib/db/providerObservedModels.ts`): the only writer; no other module reads the namespace.
+- `resolveProviderObservations` (`src/lib/providerOnboarding/onboarding.ts`): derived status
+  and provider summary, computed on read, never persisted.
+
+### Refresh semantics
+
+- Listed model: `currentlyObserved=true`, `lastObservedAt` updated, `firstObservedAt` kept.
+- New model: new row, `firstObservedAt = lastObservedAt = now`.
+- Model missing from the newest successful catalog: row kept, `currentlyObserved=false`.
+  History is never deleted automatically.
+- Failed request (`http-<status>`, `network-error`, `fetch-error`) or empty catalog
+  (`degraded`): models untouched, only `lastAttemptAt` / `refreshStatus` / `refreshError`
+  change. Upstream error text is never stored.
+- Observation fields copy only what the upstream sent; NVIDIA sends `id`/`owned_by` only, so
+  name, context, pricing, tools and streaming stay `null`. An observed `toolCallingObserved`
+  is metadata, never capability evidence.
+
+### Derived status
+
+- **Known incompatible**: `claudeCodeEligible === false` (a proven FALSE always wins).
+- **Hidden**: not currently observed, operator-hidden, or `executable === false`.
+- **Ready**: current, `executable === true`, `claudeCodeEligible === true`.
+- **Validation required**: everything else (unknown stays `null`).
+- `zeroCostEligible` is a separate flag from the existing `evaluateZeroCostRoute` contract;
+  READY never implies it.
+
+Evidence is the existing exact-model evidence only (`extractProviderModelInfo`,
+`DIRECT_PROVIDER_JUDGEMENTS`, `DIRECT_MODEL_FACTS`, `FREE_MODEL_BUDGETS`,
+`produceCapabilities`, `classifyConnectionBilling`, `resolveConnectionZeroCostSafety`) —
+no provider-wide or family inference. Reference results: NVIDIA's live catalog (82 ids) →
+3 READY (kimi-k3, deepseek-v4-pro-0813, deepseek-v4-flash-0731), 79 VALIDATION_REQUIRED,
+2 trial-credit, 0 zero-cost eligible. OpenRouter's live catalog → only
+`cohere/north-mini-code:free` READY, still without a static registry row.
+
+### Native Auto-Sync and Custom Models are activation, not observation
+
+- Native Auto-Sync (`autoSync`, `modelSyncScheduler.ts`, roughly every 24 h and 5 s after
+  startup), auto-fetch (`autoFetchModels`) and "Import from /models" write
+  `syncedAvailableModels` (replacement semantics, `importFreeModelsOnly` filtering) and, for
+  Import, provider-wide `customModels`. AutoCombo pools use synced/custom models instead of the
+  static registry when any exist, so a sync is a routing activation. It is **not** the Jarvis
+  observation store.
+- A custom model means only that the operator configured it. It does not imply
+  `toolCalling`, `verifiedFree`, `claudeCodeEligible` or `connectionSafeForZeroCost`.
+- Known caveat (next phase, routing gate): custom and synced models can currently enter
+  AutoCombo pools without Jarvis evidence.
+- Future hardening (pre-existing, not changed in A2): the static ModelSpec tool fact is keyed by
+  model identity alone, so `moonshotai/kimi-k3` resolves `toolCalling=true` on any provider
+  (e.g. `kilo-gateway`, `openrouter`) even without provider-specific evidence. Claude
+  eligibility stays `null` there because judgements are exact provider + model.
+
+### Lifecycle hooks (future, not wired)
+
+Candidate triggers for the callable refresh: successful connection test
+(`src/app/api/providers/[id]/test/route.ts`), connection create (`POST /api/providers`),
+credential or settings update (`PUT /api/providers/[id]`), manual refresh, and a periodic job.
+None is wired in A2; background observation stays off.
