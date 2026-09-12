@@ -418,14 +418,22 @@ test("H: unknown stays null; upstream flags and zero prices promote nothing", ()
 
 // ── I–K routing non-effect ──────────────────────────────────────────────────
 
-/** Every production file in the observation write path. */
+/**
+ * Every production file in the observation write path, plus (O9-F3.5 A3) the
+ * activation policy layer explicitly authorized to read resolved
+ * observations. A3 is still not a routing consumer: `ACTIVATION_WRITERS`
+ * below still asserts none of these files — A3's included — ever reference
+ * the real activation adapter.
+ */
 const OBSERVATION_FILES = [
   "src/lib/providerOnboarding/types.ts",
   "src/lib/providerOnboarding/catalog.ts",
   "src/lib/providerOnboarding/evidence.ts",
   "src/lib/providerOnboarding/onboarding.ts",
   "src/lib/providerOnboarding/refresh.ts",
+  "src/lib/providerOnboarding/activationPolicy.ts",
   "src/lib/db/providerObservedModels.ts",
+  "src/lib/db/providerActivationApprovals.ts",
   "src/app/api/providers/[id]/models/discovery/configuredCatalogFetch.ts",
   "src/app/api/providers/[id]/models/discovery/providerObservationRefresh.ts",
 ];

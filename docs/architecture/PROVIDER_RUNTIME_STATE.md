@@ -1229,3 +1229,101 @@ Candidate triggers for the callable refresh: successful connection test
 (`src/app/api/providers/[id]/test/route.ts`), connection create (`POST /api/providers`),
 credential or settings update (`PUT /api/providers/[id]`), manual refresh, and a periodic job.
 None is wired in A2; background observation stays off.
+
+## Routing Activation Gate (O9-F3.5 A3)
+
+A3 is the next, still inert, stage after A2's `SEPARATE ACTIVATION POLICY (not part of A2)`
+box above:
+
+```
+OBSERVATION INVENTORY -> EVIDENCE RESOLUTION -> READY / VALIDATION_REQUIRED / ...
+  ↓
+ACTIVATION POLICY   (src/lib/providerOnboarding/activationPolicy.ts)
+  ↓
+APPROVAL            (src/lib/db/providerActivationApprovals.ts)
+  ↓
+(existing OmniRoute synced/custom-models activation writer — NOT called by A3)
+  ↓
+routable
+```
+
+`evaluateActivationDecision` / `resolveActivationGate` only COMPUTE a verdict. Nothing in A3
+calls the existing synced/custom-models activation writer, nothing writes
+`syncedAvailableModels` or `customModels`, and nothing touches AutoCombo/quota-combo pools.
+Deciding is not activating — a caller acting on a decision's `activate: true` by invoking the
+existing writer is explicitly future work, not part of A3.
+
+### General activation candidate — policy-independent
+
+`isGeneralActivationCandidate(resolved, connectionActive)` is the single gate every policy mode
+composes with:
+
+```
+currentlyObserved === true
+&& connectionActive === true
+&& executable === true
+&& claudeCodeEligible === true
+&& knownProtocolConflict !== true
+```
+
+This is A2's READY status plus one check A2 deliberately does not make itself:
+`connectionActive`. A2's READY is a model-capability fact independent of connection state; A3
+must not offer a candidate on a dead connection. Unknown/null evidence fails closed the same as
+A2 (a VALIDATION_REQUIRED observation never becomes a candidate); a proven
+`claudeCodeEligible === false` (A2's KNOWN_INCOMPATIBLE status) is blocked under every policy
+mode and cannot be overridden by any
+approval, forced or otherwise — approval can only narrow a candidate (revoke it), never widen a
+non-candidate into one.
+
+### Policy modes
+
+`ActivationPolicyMode`: `"manual"` (default, `DEFAULT_ACTIVATION_POLICY_MODE`) |
+`"approved_ready"` | `"strict_zero_cost"`. No mode auto-activates anything unless an operator
+has explicitly selected it — nothing in the app calls `evaluateActivationDecision` yet.
+
+- **manual**: a general candidate only activates with a stored `ActivationApprovalRecord`
+  (`approved: true`) for its exact `canonicalModelId`. No record → `activate: false`,
+  reason `policy-manual-unapproved`.
+- **approved_ready**: every general candidate activates without needing a stored approval
+  record — choosing this policy mode is itself the operator's blanket approval of "READY is
+  enough". Reason `policy-approved-ready`.
+- **strict_zero_cost**: READY alone is never enough. Only activates when the candidate is also
+  `strictZeroCostCandidate` (A2's own `zeroCostEligible` / `evaluateZeroCostRoute` contract —
+  hard-stop-guaranteed cost **and** proven connection safety). Today `connectionSafeForZeroCost`
+  is unproven for every observed connection, so this mode activates nothing yet — that is the
+  correct, honest, fail-closed result, not a bug.
+- An explicit revocation (`ActivationApprovalRecord{approved:false}`) always blocks, in every
+  mode, even over a prior approval — checked before the mode switch.
+
+### Reference results (same fixtures as A2)
+
+- NVIDIA's live catalog: exactly the 3 READY models (`kimi-k3`, `deepseek-v4-pro-0813`,
+  `deepseek-v4-flash-0731`) are general activation candidates; the other 79 stay
+  `validation-required`. `openai/gpt-oss-120b` (curated `claudeCodeReady: false`) stays
+  `known-incompatible` under every policy mode, including a forced `approved: true` record.
+- OpenRouter's `cohere/north-mini-code:free`: general activation candidate under every mode,
+  but `strictZeroCostCandidate: false` — `strict_zero_cost` mode activates nothing for it today.
+
+### Pieces
+
+- `evaluateActivationDecision` / `resolveActivationGate`
+  (`src/lib/providerOnboarding/activationPolicy.ts`): pure, DB-free decision functions over one
+  `ResolvedObservation` (or a batch) plus an injected approval lookup.
+- `getActivationPolicyMode` / `setActivationPolicyMode` / `getActivationApproval` /
+  `setActivationApproval` / `listActivationApprovals` (`src/lib/db/providerActivationApprovals.ts`):
+  persistence in two new `key_value` namespaces (`providerActivationPolicyMode`,
+  `providerActivationApprovals`), deliberately separate from `syncedAvailableModels` /
+  `customModels` — nothing on the routing path reads either namespace.
+- The A2 architectural guard test (`tests/unit/providerOnboardingNvidiaA2.test.ts`, test "I")
+  now allowlists these two new files as authorized observation-layer consumers, while still
+  asserting neither one ever references the real activation writer
+  (`persistCanonicalSyncedAvailableModels` and siblings) — extending the invariant, not
+  loosening it.
+
+### Explicitly out of scope for A3
+
+- No route, hook, UI, or job calls `evaluateActivationDecision` / `resolveActivationGate` yet —
+  this PR ships the decision layer only, not a caller.
+- No wiring of `activate: true` into the existing synced/custom-models activation writer.
+- No default policy mode other than `manual`.
+- Automatic failover / model switching on a degraded route is O9-F3.5 A4 (roadmap), not A3.
