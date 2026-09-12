@@ -375,6 +375,6 @@ test("openrouter: free model evidence does not establish account safety", () => 
     connectionId: "or-1",
     providerSpecificData: { apiKeyHealth: {} },
   });
-  assert.equal(resolveVerifiedFree("openrouter", "auto"), true);
+  assert.equal(resolveVerifiedFree("openrouter", "cohere/north-mini-code:free"), true);
   assert.equal(connection.safe, null);
 });

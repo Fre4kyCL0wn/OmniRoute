@@ -177,7 +177,7 @@ test("curated-at marker is an ISO date", () => {
 test("recurring freeTypes (daily, uncapped) resolve to true", () => {
   assert.equal(resolveVerifiedFree("gemini", "gemini-3.1-flash-lite"), true); // recurring-uncapped
   assert.equal(resolveVerifiedFree("groq", "openai/gpt-oss-120b"), true); // recurring-daily
-  assert.equal(resolveVerifiedFree("openrouter", "auto"), true); // recurring-daily
+  assert.equal(resolveVerifiedFree("openrouter", "liquid/lfm-2.5-2.6b:free"), true); // recurring-daily
 });
 
 test("one-time-initial (trial credit) resolves to a proven FALSE, not null", () => {

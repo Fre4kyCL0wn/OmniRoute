@@ -339,9 +339,15 @@ export const FREE_MODEL_BUDGETS: FreeModelBudget[] = [
   { provider: "opencode-zen", modelId: "opencode/mimo-v2.5-free", displayName: "MiMo V2.5 (free)", monthlyTokens: 0, creditTokens: 0, freeType: "recurring-uncapped", poolKey: "opencode-zen-free", tos: "caution" },
   { provider: "opencode-zen", modelId: "opencode/north-mini-code-free", displayName: "North Mini Code (free)", monthlyTokens: 0, creditTokens: 0, freeType: "recurring-uncapped", poolKey: "opencode-zen-free", tos: "caution" },
   { provider: "opencode-zen", modelId: "opencode/nemotron-3-ultra-free", displayName: "Nemotron 3 Ultra (free)", monthlyTokens: 0, creditTokens: 0, freeType: "recurring-uncapped", poolKey: "opencode-zen-free", tos: "caution" },
-  { provider: "openrouter", modelId: "auto", displayName: "Auto (Best Available)", monthlyTokens: 1200000, creditTokens: 0, freeType: "recurring-daily", poolKey: "openrouter-free", tos: "caution" },
+  // openrouter/auto is intentionally NOT catalogued: it is OpenRouter's Auto Router, which picks the
+  // upstream model per request (paid models included), so no exact model is proven free (O9-F3.4 P4-H1).
   { provider: "openrouter", modelId: "stealth/ox-alpha", displayName: "Stealth Ox Alpha (free)", monthlyTokens: 0, creditTokens: 0, freeType: "recurring-daily", poolKey: "openrouter-free", tos: "caution" },
   { provider: "openrouter", modelId: "liquid/lfm-2.5-2.6b:free", displayName: "LiquidAI: LFM2.5-2.6B (free)", monthlyTokens: 0, creditTokens: 0, freeType: "recurring-daily", poolKey: "openrouter-free", tos: "caution" },
+  // evidence (O9-F3.4 P4-H audit, 2026-09-12): explicit :free variant with one upstream endpoint
+  // (Cohere) priced $0 input / $0 output (openrouter.ai/api/v1/models/cohere/north-mini-code:free/endpoints);
+  // OpenRouter documents :free requests as never billed (20 RPM; 50 or 1000 requests/day). Model-level
+  // cost evidence only — no hardStopGuaranteed, no account safety, no Claude-Code compatibility.
+  { provider: "openrouter", modelId: "cohere/north-mini-code:free", displayName: "Cohere North Mini Code (free)", monthlyTokens: 0, creditTokens: 0, freeType: "recurring-daily", poolKey: "openrouter-free", tos: "caution" },
   { provider: "pollinations", modelId: "openai", displayName: "OpenAI (Pollinations)", monthlyTokens: 0, creditTokens: 0, freeType: "keyless", poolKey: "pollinations", tos: "caution" },
   { provider: "pollinations", modelId: "openai-fast", displayName: "OpenAI Fast (Pollinations)", monthlyTokens: 0, creditTokens: 0, freeType: "keyless", poolKey: "pollinations", tos: "caution" },
   { provider: "pollinations", modelId: "openai-large", displayName: "OpenAI Large (Pollinations)", monthlyTokens: 0, creditTokens: 0, freeType: "keyless", poolKey: "pollinations", tos: "caution" },

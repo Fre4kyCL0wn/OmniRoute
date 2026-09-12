@@ -49,7 +49,11 @@ test("free does not imply Claude compatibility: unproven Groq recurring-free mod
 });
 
 test("free does not imply Claude compatibility: OpenRouter free entries stay null", () => {
-  for (const model of ["auto", "stealth/ox-alpha", "liquid/lfm-2.5-2.6b:free"]) {
+  for (const model of [
+    "cohere/north-mini-code:free",
+    "stealth/ox-alpha",
+    "liquid/lfm-2.5-2.6b:free",
+  ]) {
     const c = caps("openrouter", model);
     assert.equal(c.verifiedFree, true, `openrouter/${model} verifiedFree`);
     assert.equal(c.claudeCodeEligible, null, `openrouter/${model}`);
