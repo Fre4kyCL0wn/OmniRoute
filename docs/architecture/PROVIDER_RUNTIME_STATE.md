@@ -708,6 +708,51 @@ so none is route-eligible yet. All of this is pinned by `tests/unit/claudeCodeEv
 What would move a candidate: one live Claude Code tool roundtrip through Shadow per model (D6-L3
 style) — deferred; it needs operator approval and, for Groq, a connection that does not exist yet.
 
+## P4-D Groq Live-Evidence Preparation (O9-F3.4 P4-D)
+
+Audit only — no capability data changed; Groq stays 0 `true` / 0 `false`.
+
+**Zero-cost set (current repo):** `openai/gpt-oss-120b`, `openai/gpt-oss-20b`,
+`openai/gpt-oss-safeguard-20b`, `qwen/qwen3.6-27b`, `qwen/qwen3.8-27b` — all `recurring-daily`
+with `hardStopGuaranteed: true` (cited from Groq's rate-limit and billing pages), executable,
+`toolCalling: null`, `claudeCodeEligible: null`.
+
+**Path:** Claude Code → `/v1/messages` → `claude-to-openai.ts` → executor `base.ts`
+(`sanitizeReasoningEffortForProvider`, then `stripGroqUnsupportedFields`) → Groq
+`/openai/v1/chat/completions` → `openai-to-claude.ts`. Only the field strip is Groq-specific;
+nothing is model-specific. Jarvis tests cover the strip and the `reasoning_effort` keep/strip rules
+(#3258, #12134) — none covers Groq tool calls.
+
+**Protocol risks the live test must resolve:**
+
+- Assistant thinking history goes out as message-level `reasoning_content` (Groq has no
+  `reasoningTransport`, so the plaintext default applies). FCC replays it as `<think>` tags for
+  Groq instead. The generic 400 field-downgrade (`KNOWN_OFFENDING_FIELDS`) only strips top-level
+  fields, so it would not recover this. Most likely to surface on the tool-result continuation.
+- `reasoning_effort`: no Groq branch and no `supportsXHighEffort` opt-out, so `xhigh` passes
+  through. The generic 400/422 enum clamp-and-retry recovers only if Groq's error lists accepted
+  values; Qwen models on Groq use a different value set.
+- Request size: Groq free-tier TPM limits are not recorded in the repo, while a Claude Code prompt
+  carries every tool schema. The test should record `x-ratelimit-limit-tokens`.
+
+**Connection safety:** `connectionBillingCatalog.ts` has no Groq entry and a new key carries no
+evidence, so `resolveConnectionZeroCostSafety` is `null`. The model-level hard stop describes the
+Free plan (no payment method on file); a Developer-tier key on the same models can bill. Safe
+requires provider-observed `billingLinked: false` for that key, or a curated Groq contract.
+
+**Future test model: `openai/gpt-oss-120b`** — recurring free with a hard stop; one of the two
+Groq models with Jarvis reasoning-path tests (#3258, #12134, both keep `reasoning_effort`);
+general-purpose, unlike the safeguard classifier; avoids the Qwen `reasoning_effort` value risk;
+the larger gpt-oss model for a tool-calling test.
+
+**Live sequence (not run):** operator adds a Groq key through the Shadow dashboard provider page;
+verify metadata only; isolated Claude Code addressing the model explicitly with `--model` —
+discovery will not list it while `claudeCodeEligible` is `null` (D4 fails closed), which is
+itself a check; one text request (`JARVIS_GROQ_OK`); one read-only `pwd` roundtrip; observe
+streaming, tool call, tool-result continuation, finish reason, rate-limit headers, health,
+fallback and protocol errors. A text-only pass never justifies `true`. Pinned by
+`tests/unit/groqLiveEvidenceP4d.test.ts`.
+
 ## D5 FCC Preferred-Candidate Ranking Wiring (O9-F3.3P1-D5)
 
 D5 wires D0's already-built, already-tested `computeFccRankingSignal` (`fccRankingSignal.ts`) into
