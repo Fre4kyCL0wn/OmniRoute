@@ -179,5 +179,7 @@ the model under a **recurring** `freeType` (`recurring-daily`/`-monthly`/`-credi
 see the resolver's docblock). It never reads `hardStopGuaranteed`, live quota state, or account
 billing context — **`verifiedFree: true` is not the same guarantee as passing this page's
 `STRICT_ZERO_COST` filter**, and the D1/D2 pipeline does not call into `strictZeroCostFilter.ts`
-today. Composing the two (account/connection billing-safety layer) is O9-F3.4 P4-B, not yet
-implemented.
+today. O9-F3.4 P4-B adds the per-connection billing-safety layer and a dormant route composition
+(`evaluateZeroCostRoute`) — see `SUBSCRIPTION_LADDER.md` → "Per-connection billing evidence".
+Neither is wired into this filter; its own `hardStopGuaranteed` and live-quota checks are
+unchanged.

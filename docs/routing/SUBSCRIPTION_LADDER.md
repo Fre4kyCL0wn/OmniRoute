@@ -51,6 +51,36 @@ otherwise `unknown`. **Uncurated is not free** — `unknown` is consumed as `met
 everywhere, so a provider added tomorrow starts outside the subscription rung and has to be
 curated in deliberately.
 
+## Per-connection billing evidence (O9-F3.4 P4-B)
+
+The catalog is keyed by provider and `authType`, so it cannot tell two API keys of the same
+provider apart — yet a free-tier project without a billing account and a paid-tier project with
+one can hold identical keys for identical models. That per-account fact lives on the connection
+itself, at `provider_connections.provider_specific_data.billingEvidence`:
+
+```ts
+{
+  billingLinked: boolean | null;
+  origin: "provider-observed" | "operator-declared";
+  observedAt: string | null;
+}
+```
+
+The connection API accepts only `origin: "operator-declared"`; `provider-observed` is reserved
+for server-side detection, so an operator's assertion is never stored as provider truth.
+`resolveConnectionZeroCostSafety()` (`autoCombo/connectionBilling.ts`) resolves most
+conservative first: the no-auth sentinel → safe; catalog `meters-to-paid` → unsafe; catalog
+`hard-stop` → safe; evidence `billingLinked: true` (any origin) → unsafe; `billingLinked: false`
+→ safe **only when `provider-observed`**; anything else → `null`, which is unsafe. Trust is
+asymmetric: weak evidence may prove unsafe, never safe — an operator declaration of "not
+linked" is stored and reported (`basis: "unverified-not-linked"`) but stays `null`. Storing
+evidence is not trusting it. Evidence is only ever read from the connection being classified.
+
+This is the middle of three separate layers: model free evidence (`verifiedFree`,
+`providers/directCapabilities.ts`), connection billing safety (this section), and route
+eligibility (`evaluateZeroCostRoute`, `autoCombo/zeroCostRouteEligibility.ts`). None is wired
+into live routing yet; the ladder below and STRICT_ZERO_COST are unchanged.
+
 ## The rung model
 
 Five rungs in escalation order. They differ in more than price — each has its **own**

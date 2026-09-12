@@ -92,6 +92,42 @@ function validatePeakHourProtectionBlock(value: unknown, ctx: z.RefinementCtx): 
   });
 }
 
+const BILLING_EVIDENCE_KEYS = new Set(["billingLinked", "origin", "observedAt"]);
+
+// O9-F3.4 P4-B — per-connection billing evidence. The API accepts operator
+// declarations only: `provider-observed` is reserved for server-side detection,
+// so an operator assertion can never be stored as provider truth.
+function validateBillingEvidenceBlock(data: Record<string, unknown>, ctx: z.RefinementCtx): void {
+  const evidence = data.billingEvidence;
+  if (evidence === undefined || evidence === null) return;
+  const issue = (message: string, key?: string) =>
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `providerSpecificData.billingEvidence${key ? `.${key}` : ""} ${message}`,
+      path: key ? ["billingEvidence", key] : ["billingEvidence"],
+    });
+  if (typeof evidence !== "object" || Array.isArray(evidence)) {
+    issue("must be an object");
+    return;
+  }
+  const record = evidence as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!BILLING_EVIDENCE_KEYS.has(key)) issue("is not a supported field", key);
+  }
+  if (record.billingLinked !== null && typeof record.billingLinked !== "boolean") {
+    issue("must be a boolean or null", "billingLinked");
+  }
+  if (record.origin !== "operator-declared") issue('must be "operator-declared"', "origin");
+  const observedAt = record.observedAt;
+  if (
+    observedAt !== undefined &&
+    observedAt !== null &&
+    (typeof observedAt !== "string" || Number.isNaN(Date.parse(observedAt)))
+  ) {
+    issue("must be an ISO date string or null", "observedAt");
+  }
+}
+
 function validateCacheBlock(data: Record<string, unknown>, ctx: z.RefinementCtx): void {
   const cache = data.cache;
   if (cache === undefined) return;
@@ -344,6 +380,7 @@ export function validateProviderSpecificData(
   }
 
   validateCacheBlock(data, ctx);
+  validateBillingEvidenceBlock(data, ctx);
 
   const consoleApiKey = data.consoleApiKey;
   if (consoleApiKey !== undefined && consoleApiKey !== null && typeof consoleApiKey !== "string") {
