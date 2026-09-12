@@ -428,6 +428,13 @@ test("H: unknown stays null; upstream flags and zero prices promote nothing", ()
  * deliberately does NOT need this allowlist at all — it has zero A2/A3
  * coupling by design; only `src/lib/failover/failoverA3Adapter.ts` (the
  * translation layer) touches this pipeline.
+ *
+ * (O9-F3.5 A7.1) `shadowControlPlaneAdapter.ts` is the "R0" read adapter: it
+ * feeds a live Shadow connection snapshot through the same
+ * `resolveProviderObservations`/`resolveActivationGate` pipeline used
+ * everywhere else in A2/A3, purely to COMPUTE a dry-run desired-state/
+ * reconciliation artifact. Same authorization as `failoverA3Adapter.ts` —
+ * read-only consumer, never a routing/activation writer.
  */
 const OBSERVATION_FILES = [
   "src/lib/providerOnboarding/types.ts",
@@ -439,6 +446,7 @@ const OBSERVATION_FILES = [
   "src/lib/db/providerObservedModels.ts",
   "src/lib/db/providerActivationApprovals.ts",
   "src/lib/failover/failoverA3Adapter.ts",
+  "src/lib/failover/shadowControlPlaneAdapter.ts",
   "src/app/api/providers/[id]/models/discovery/configuredCatalogFetch.ts",
   "src/app/api/providers/[id]/models/discovery/providerObservationRefresh.ts",
 ];

@@ -2182,3 +2182,65 @@ unrelated repo mechanism, that this debt is base-red and not something A2–A7 i
 the three is fixed here, per Hard Rule discipline against opportunistic unrelated fixes; the
 baseline exists precisely so a FUTURE fix to any of them ratchets the gate down
 (`--update`) instead of being silently absorbed.
+
+## Shadow Control-Plane Read Adapter (O9-F3.5 A7.1 "R0")
+
+A7 stopped at reconciliation planning — a pure computation with no live inputs. A7.1's first
+milestone is proving that computation against genuine, live Shadow state, before any controlled
+apply is attempted. `src/lib/failover/shadowControlPlaneAdapter.ts` is the one new piece this
+required: a read-only HTTP client that feeds OmniRoute's own already-deployed management API into
+the existing, unmodified A2–A7 pure-function pipeline.
+
+### Architectural boundary: Jarvis owns intent, OmniRoute owns execution
+
+**Jarvis does not need to execute inside OmniRoute.** The adapter is the seam: it calls
+`GET /api/providers` and `GET /api/combos` — OmniRoute's own normal, authenticated,
+`requireManagementAuth`-gated read endpoints, the same ones the dashboard itself uses — maps the
+response into the exact structured types A2–A7 already expect
+(`BillableConnection`, `ProviderObservationInventory`, `CurrentComboState`, …), and runs the
+identical pure pipeline this whole initiative has used since A2. Nothing here executes inside
+OmniRoute's own process; nothing here is a new routing mechanism. Jarvis's own decision engine
+stays entirely local and entirely pure — a value computed from a snapshot, reproducible from a
+second read. Any eventual write still goes through OmniRoute's own normal Combo API/service path
+(`POST`/`PUT /api/combos`), never a raw DB mutation, and never from inside this adapter — R0 is
+read-only by construction (it has no write function at all).
+
+### logicalId vs. physical Combo name
+
+A7's `MANAGED_COMBO_LOGICAL_ID_PREFIX` is `"jarvis-managed:"` — a colon-separated identity chosen
+for A7's own conceptual clarity, computed and tested purely in memory. Wiring R0 against a REAL
+`POST /api/combos` call surfaced a genuine, previously-undiscovered mismatch: OmniRoute's own
+`comboNameSchema` (`src/shared/validation/schemas/combo.ts`) allows only
+`[a-zA-Z0-9_/.\-\[\] ]` in a combo's `name` — no colon. A7's logical id was never actually usable
+as a real Combo's `name` field.
+
+`managedComboPhysicalName(logicalId)` / `physicalNameToManagedComboLogicalId(physicalName)` (in
+the R0 adapter) are the one place that bridges this: `jarvis-managed:<purpose>` (logical, A7's own
+domain) maps to `jarvis-managed/<purpose>` (physical, the real stored Combo name) — an injective,
+round-tripping substitution of the fixed prefix's separator only; `purpose` itself is carried
+through unchanged, so two distinct purposes can never collide onto the same physical name, and a
+schema-unsafe purpose fails closed (throws) rather than silently corrupting into something else.
+A7's own types and every A2–A7 function are unchanged — this is purely an adapter-layer concern,
+resolved once, at the one boundary that actually talks to the real Combo API.
+
+### Live evidence gap — no fabricated candidates
+
+R0 deliberately does **not** call `GET /api/providers/[id]/models` (live catalog discovery — can
+trigger a real outbound provider request and is the literal "`/models` import" mechanism this
+phase's hard constraints forbid) or rely on `autoFetchModels`. The one endpoint that would
+otherwise be the right, genuinely read-only source for "which models a connection already has" —
+`GET /api/synced-available-models` — was found, during this phase's live testing, to return `401`
+against the deployed Shadow image even with a valid `manage`-scope credential, while
+`/api/providers` and `/api/combos` both authenticate successfully with the identical credential.
+This is a real, reported gap in the currently-deployed API surface, not something R0 works around.
+
+Consequence, by design rather than by accident: every connection's `ProviderObservationInventory`
+defaults to genuinely empty (`emptyInventory`, exported from `catalog.ts` for exactly this reuse)
+unless a caller explicitly supplies one. An empty inventory is not a shortcut — it is what A2 has
+always meant by "never observed," and it correctly, honestly cascades through A3–A7 to
+NO_SAFE_ROUTE / `reconciliationPlan.action: "NO_CHANGE"`. The first real, live A7.1 run against
+Shadow's 5 real provider connections produced exactly that result — proving the wiring is real,
+not that anything was routed. `tests/unit/shadowControlPlaneAdapterR0.test.ts` separately proves
+the full chain reaches a genuine `DESIRED` state once real observation evidence exists (using A2's
+own proven-READY `nvidia/moonshotai/kimi-k3` fixture), so the empty live result is a fact about
+today's available evidence, not a limitation of the pipeline itself.

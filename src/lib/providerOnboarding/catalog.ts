@@ -122,7 +122,14 @@ export function normalizeObservedModels(
  * root cause of this file's other diagnostics), never a runtime bug — the
  * empty array's actual values were always correct.
  */
-function emptyInventory(
+/**
+ * Exported for reuse by any caller that needs a well-formed, empty inventory
+ * for a connection it has no persisted observation history for yet (e.g. a
+ * live control-plane read adapter querying a connection A2's own refresh
+ * mechanism has never run against) — same explicit-return-type reasoning as
+ * the internal call site above applies here.
+ */
+export function emptyInventory(
   providerId: string,
   connectionId: string,
   source: string

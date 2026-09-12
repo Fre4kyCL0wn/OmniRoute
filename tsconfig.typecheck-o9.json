@@ -13,6 +13,7 @@
     "tests/unit/autonomousFailoverA4.test.ts",
     "tests/unit/nativeComboIntegrationA5.test.ts",
     "tests/unit/strategyPolicyEngineA6.test.ts",
-    "tests/unit/managedComboOrchestrationA7.test.ts"
+    "tests/unit/managedComboOrchestrationA7.test.ts",
+    "tests/unit/shadowControlPlaneAdapterR0.test.ts"
   ]
 }
