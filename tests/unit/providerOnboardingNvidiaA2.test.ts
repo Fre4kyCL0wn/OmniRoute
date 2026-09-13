@@ -449,6 +449,10 @@ const OBSERVATION_FILES = [
   "src/lib/failover/shadowControlPlaneAdapter.ts",
   "src/app/api/providers/[id]/models/discovery/configuredCatalogFetch.ts",
   "src/app/api/providers/[id]/models/discovery/providerObservationRefresh.ts",
+  // (O9-F3.5 A7.1 "R4.2a") The control-plane route that finally calls
+  // `refreshConnectionObservations` — it never touches an ACTIVATION_WRITER,
+  // so it belongs here, not in AUTHORIZED_ACTIVATION_BRIDGE_FILES below.
+  "src/app/api/provider-observations/refresh-observation/route.ts",
 ];
 /**
  * (O9-F3.5 A7.1 "R4.2") The one and only authorized BRIDGE between the

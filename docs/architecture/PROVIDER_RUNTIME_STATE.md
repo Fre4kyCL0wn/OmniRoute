@@ -1169,7 +1169,14 @@ effect.
 - `refreshConnectionObservations`
   (`src/app/api/providers/[id]/models/discovery/providerObservationRefresh.ts`): callable
   refresh for one connection, opt-in per provider (`OBSERVATION_CATALOG_PROVIDERS`: `nvidia`,
-  `openrouter`). Not wired to any route, hook or timer.
+  `openrouter`). Wired to exactly one route as of O9-F3.5 A7.1 "R4.2a":
+  `POST /api/provider-observations/refresh-observation`
+  (`src/app/api/provider-observations/refresh-observation/route.ts`) — management-authenticated
+  (`requireManagementAuth`, plain `write`/`manage` scope, admin never required), one connection
+  per request, response is a secret-free counts summary
+  (`REFRESHED`/`FAILED`/`DEGRADED`, `observedCount`/`newCount`/`stillObservedCount`/
+  `noLongerObservedCount`). No scheduler, hook or timer calls it; every invocation is an explicit
+  authenticated request.
 - `applyObservationRefresh` (`src/lib/providerOnboarding/catalog.ts`): refresh semantics.
 - `getProviderObservationInventory` / `saveProviderObservationInventory`
   (`src/lib/db/providerObservedModels.ts`): the only writer; no other module reads the namespace.
@@ -1227,8 +1234,31 @@ no provider-wide or family inference. Reference results: NVIDIA's live catalog (
 
 Candidate triggers for the callable refresh: successful connection test
 (`src/app/api/providers/[id]/test/route.ts`), connection create (`POST /api/providers`),
-credential or settings update (`PUT /api/providers/[id]`), manual refresh, and a periodic job.
-None is wired in A2; background observation stays off.
+credential or settings update (`PUT /api/providers/[id]`), and a periodic job. Manual refresh is
+now wired (`POST /api/provider-observations/refresh-observation`, O9-F3.5 A7.1 "R4.2a"); none of
+the others is wired — background/automatic observation stays off.
+
+### Full lifecycle and ownership boundaries (O9-F3.5 A7.1 "R4.2a")
+
+```
+DISCOVER -> OBSERVE -> CLASSIFY -> APPROVE -> ACTIVATE -> ROUTABLE -> COMBO-ELIGIBLE -> ROUTED
+```
+
+| Stage          | Owner                                                                                                                     | What it does                                                                                                                          | What it never does                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| DISCOVER       | Passive discovery (`POST /api/provider-observations/passive-model-discovery`, R2)                                         | Read-only provider catalog probe for selected connections                                                                             | Persist an observation inventory                                                                |
+| OBSERVE        | Observation refresh (`POST /api/provider-observations/refresh-observation`, R4.2a) + `refreshConnectionObservations` (A2) | Bounded catalog fetch for one connection, normalize, persist `providerObservedModels` only                                            | Activate a model, write synced/custom models, touch Auto-Sync, write a Combo, perform inference |
+| CLASSIFY       | `resolveProviderObservations` / `evidence.ts` (A2)                                                                        | Derive `READY` / `VALIDATION_REQUIRED` / `KNOWN_INCOMPATIBLE` / `HIDDEN` from observation + existing exact evidence, computed on read | Persist a verdict; expand the static registry                                                   |
+| APPROVE        | `providerActivationApprovals` / activation policy (A3/R4)                                                                 | Authorization intent for one model on one connection                                                                                  | Mutate routing state                                                                            |
+| ACTIVATE       | `activationOrchestrator` / `POST /api/provider-observations/activate-model` (R4.2)                                        | Plan + execute exactly one `replaceSyncedAvailableModelsForConnection` write for one approved model                                   | Perform a provider network request (reads observation evidence already persisted by OBSERVE)    |
+| ROUTABLE       | `syncedAvailableModels` / `customModels`                                                                                  | The connection's model is now visible to routing                                                                                      | —                                                                                               |
+| COMBO-ELIGIBLE | Combo reconciliation (separate routing mutation, out of this lifecycle)                                                   | Decide pool membership                                                                                                                | —                                                                                               |
+| ROUTED         | Request pipeline (`open-sse/handlers`, `open-sse/services/combo.ts`)                                                      | Actual inference dispatch                                                                                                             | —                                                                                               |
+
+Each stage is a distinct authorization boundary and a distinct writer. OBSERVE and ACTIVATE are
+deliberately two different routes under `/api/provider-observations/*` (never `/api/providers/*`
+— see `docs/architecture/AUTHZ_GUIDE.md`, "Passive observation vs. provider administration") so
+that observing a catalog can never, by itself, change what routes.
 
 ## Routing Activation Gate (O9-F3.5 A3)
 
