@@ -19,25 +19,36 @@
  *     "/models import") — calling it can trigger a real outbound provider
  *     request and is explicitly forbidden.
  *   - `GET /api/synced-available-models` — a genuinely read-only endpoint
- *     that would otherwise be the right source for "which models does this
- *     connection already have", but it does not currently authenticate with
- *     a `manage`-scope key against the deployed Shadow image (observed: a
- *     401 "Authentication required" where `/api/providers` and
- *     `/api/combos` both succeed with the identical credential) — a real,
- *     reported API gap, not something this module works around.
+ *     that would otherwise be a candidate source, but it does not currently
+ *     authenticate with a `manage`-scope key against the deployed Shadow
+ *     image (observed: a 401 "Authentication required" where `/api/providers`
+ *     and `/api/combos` both succeed with the identical credential — a real
+ *     API gap, not something this module works around), and even where its
+ *     auth does pass it unions models across a provider's connections
+ *     instead of exposing them per connection.
  *
- * Consequence: with no safe, working read source for "what models has this
- * connection's catalog reported", every connection's `ProviderObservationInventory`
- * defaults to genuinely empty (never fabricated) unless a caller explicitly
- * supplies one (tests do, to prove the full A2-A7 chain; a real, future,
- * approved data source would too). An empty inventory is not a shortcut —
- * it is what A2 has always meant by "never observed", and it correctly,
- * honestly cascades to `NO_SAFE_ROUTE` through A3-A7 exactly as designed.
+ * O9-F3.5 A7.1 "R1" added `GET /api/providers/observed-models`
+ * (`src/app/api/providers/observed-models/route.ts`) as the safe,
+ * connection-scoped read source this file was missing: `requireManagementAuth`
+ * (proven, live, against the deployed Shadow image — same guard as
+ * `/api/providers`/`/api/combos`), pure reads only (`getRawProviderConnections`
+ * projected to id/provider, `getSyncedAvailableModelsByConnection`), no
+ * upstream provider call, no writes. `fetchShadowObservedModels` /
+ * `buildObservationInventoryFromShadowObservedModels` below consume it.
+ *
+ * The currently *running* Shadow container image predates this endpoint
+ * (R1 does not rebuild/redeploy Shadow — see the R1 mission constraints), so
+ * this has been proven only against fakes so far; the live A2-A7 proof is
+ * BLOCKED_PENDING_DEPLOYMENT until a Shadow image containing this route is
+ * running. Until then, a caller that does not explicitly supply
+ * `observationInventoryByConnection` still gets a genuinely empty inventory
+ * per connection (never fabricated) — the same honest `NO_SAFE_ROUTE`
+ * cascade through A3-A7 as before R1.
  */
 import type { BillableConnection } from "@omniroute/open-sse/services/autoCombo/connectionBilling.ts";
 import type { ProviderRuntimeState } from "@omniroute/open-sse/services/providerRuntimeState.ts";
 
-import { emptyInventory } from "../providerOnboarding/catalog";
+import { applyObservationRefresh, emptyInventory } from "../providerOnboarding/catalog";
 import {
   resolveActivationGate,
   type ActivationApprovalRecord,
@@ -243,6 +254,110 @@ export async function fetchShadowCombos(
     if (mapped) combos.push(mapped);
   }
   return { ok: true, data: combos };
+}
+
+// ---------------------------------------------------------------------------
+// Live observed-models snapshot (R1) — connection-scoped synced catalog
+// ---------------------------------------------------------------------------
+
+/** One connection's currently-persisted synced model rows. Raw model entries
+ * are intentionally left as `unknown` here — A2's own `normalizeObservedModels`
+ * (via `applyObservationRefresh` below) already tolerates and fails closed on
+ * malformed individual entries; duplicating that validation here would only
+ * risk drifting out of sync with it. */
+export interface ShadowObservedModelsConnection {
+  connectionId: string;
+  models: readonly unknown[];
+}
+
+export interface ShadowObservedModelsProvider {
+  providerId: string;
+  connections: readonly ShadowObservedModelsConnection[];
+}
+
+export interface ShadowObservedModelsSnapshot {
+  providers: readonly ShadowObservedModelsProvider[];
+}
+
+function mapRawObservedModelsConnection(raw: unknown): ShadowObservedModelsConnection | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.connectionId !== "string" || r.connectionId.trim() === "") return null;
+  if (!Array.isArray(r.models)) return null;
+  return { connectionId: r.connectionId, models: r.models };
+}
+
+function mapRawObservedModelsProvider(raw: unknown): ShadowObservedModelsProvider | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.providerId !== "string" || r.providerId.trim() === "") return null;
+  if (!Array.isArray(r.connections)) return null;
+  const connections: ShadowObservedModelsConnection[] = [];
+  for (const item of r.connections) {
+    const mapped = mapRawObservedModelsConnection(item);
+    // One malformed connection row must not hide the provider's other,
+    // well-formed connections — same "skip, don't fail the batch" rule as
+    // `fetchShadowProviderConnections`/`fetchShadowCombos` above.
+    if (mapped) connections.push(mapped);
+  }
+  return { providerId: r.providerId, connections };
+}
+
+export async function fetchShadowObservedModels(
+  deps: ShadowClientDeps
+): Promise<ShadowReadResult<ShadowObservedModelsSnapshot>> {
+  const result = await fetchShadowJson<{ providers?: unknown }>(
+    deps,
+    "/api/providers/observed-models"
+  );
+  if (result.ok === false) return { ok: false, status: result.status, error: result.error };
+  const raw = result.data && Array.isArray(result.data.providers) ? result.data.providers : null;
+  if (!raw) return { ok: false, status: null, error: "malformed_response" };
+  const providers: ShadowObservedModelsProvider[] = [];
+  for (const item of raw) {
+    const mapped = mapRawObservedModelsProvider(item);
+    if (mapped) providers.push(mapped);
+  }
+  return { ok: true, data: { providers } };
+}
+
+/** Distinct from `/api/providers` and `/api/combos`'s own read paths — this is
+ * A2's own refresh-source label, never confused with a live `/models` probe. */
+const SHADOW_OBSERVED_MODELS_SOURCE = "shadow-observed-models-endpoint";
+
+/**
+ * Pure transform: turns one `ShadowObservedModelsSnapshot` read into the
+ * per-connection `ProviderObservationInventory` map `runShadowManagedComboPipeline`
+ * accepts as `observationInventoryByConnection`. A connection absent from the
+ * snapshot is simply absent from this map — the pipeline runner already
+ * defaults an absent connection to `emptyInventory` (genuinely "never
+ * observed"), so this function never needs to fabricate one itself.
+ */
+export function buildObservationInventoryFromShadowObservedModels(
+  snapshot: ShadowObservedModelsSnapshot,
+  nowMs: number
+): ReadonlyMap<string, ProviderObservationInventory> {
+  const observedAt = new Date(nowMs).toISOString();
+  const byConnection = new Map<string, ProviderObservationInventory>();
+  for (const provider of snapshot.providers) {
+    for (const connection of provider.connections) {
+      // A connectionId repeated under a second provider row would be a
+      // malformed/ambiguous response — first-seen wins, never merged or
+      // overwritten across providers.
+      if (byConnection.has(connection.connectionId)) continue;
+      byConnection.set(
+        connection.connectionId,
+        applyObservationRefresh(null, {
+          providerId: provider.providerId,
+          connectionId: connection.connectionId,
+          source: SHADOW_OBSERVED_MODELS_SOURCE,
+          observedAt,
+          outcome: { ok: true, items: connection.models },
+        })
+      );
+    }
+  }
+  return byConnection;
 }
 
 // ---------------------------------------------------------------------------
