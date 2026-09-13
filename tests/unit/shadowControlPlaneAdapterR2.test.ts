@@ -51,7 +51,7 @@ function fakeDeps(
 
 test("fetchShadowPassiveDiscovery parses a well-formed response", async () => {
   const deps = fakeDeps({
-    "/api/providers/passive-model-discovery": {
+    "/api/provider-observations/passive-model-discovery": {
       status: 200,
       body: {
         fetchedAt: "2026-09-13T00:00:00.000Z",
@@ -76,7 +76,7 @@ test("fetchShadowPassiveDiscovery parses a well-formed response", async () => {
 
 test("fetchShadowPassiveDiscovery fails closed on a malformed response", async () => {
   const deps = fakeDeps({
-    "/api/providers/passive-model-discovery": { status: 200, body: { nonsense: true } },
+    "/api/provider-observations/passive-model-discovery": { status: 200, body: { nonsense: true } },
   });
   const result = await fetchShadowPassiveDiscovery(deps);
   assert.equal(result.ok, false);

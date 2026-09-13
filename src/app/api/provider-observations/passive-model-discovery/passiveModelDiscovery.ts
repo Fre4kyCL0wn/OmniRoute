@@ -1,5 +1,9 @@
 /**
- * Passive Provider Model Discovery — callable core (O9-F3.5 A7.1 "R2").
+ * Passive Provider Model Discovery — callable core (O9-F3.5 A7.1 "R2";
+ * relocated from `src/app/api/providers/passive-model-discovery/` to
+ * `src/app/api/provider-observations/passive-model-discovery/` in "R2.2" —
+ * an authorization-namespace fix only, this module's own logic is
+ * byte-for-byte unchanged).
  *
  * PASSIVE DISCOVERY != AUTO-SYNC. This module performs a read-only provider
  * *model-catalog* request (the same `/v1/models`-style endpoint OmniRoute's
@@ -32,16 +36,16 @@
  * `fetchConfiguredProviderCatalog` for the actual bounded, paginated request.
  * No second model ecosystem, no parallel provider clients.
  */
-import { deriveConfigFromRegistryModelsUrl } from "../[id]/models/discoveryConfig";
+import { deriveConfigFromRegistryModelsUrl } from "../../providers/[id]/models/discoveryConfig";
 import {
   fetchConfiguredProviderCatalog,
   resolveConfiguredCatalogUrl,
   type ConfiguredCatalogPageFetch,
-} from "../[id]/models/discovery/configuredCatalogFetch";
+} from "../../providers/[id]/models/discovery/configuredCatalogFetch";
 import {
   PROVIDER_MODELS_CONFIG,
   type ProviderModelsConfigEntry,
-} from "../[id]/models/discovery/providerModelsConfig";
+} from "../../providers/[id]/models/discovery/providerModelsConfig";
 import { FetchTimeoutError } from "@/shared/utils/fetchTimeout";
 
 /**

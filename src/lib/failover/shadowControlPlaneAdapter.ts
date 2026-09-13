@@ -367,12 +367,22 @@ export function buildObservationInventoryFromShadowObservedModels(
 /**
  * O9-F3.5 A7.1 "R2" — passive provider model discovery. Unlike
  * `fetchShadowObservedModels` (R1, a pure local read), calling
- * `POST /api/providers/passive-model-discovery` makes Shadow itself perform a
- * real outbound provider model-CATALOG request (never inference) using that
- * connection's own stored credential. This adapter never receives or forwards
- * that credential — only `providerId`/`connectionId`/`status`/raw `models`
- * cross the boundary. See `src/app/api/providers/passive-model-discovery/
+ * `POST /api/provider-observations/passive-model-discovery` makes Shadow
+ * itself perform a real outbound provider model-CATALOG request (never
+ * inference) using that connection's own stored credential. This adapter
+ * never receives or forwards that credential — only
+ * `providerId`/`connectionId`/`status`/raw `models` cross the boundary. See
+ * `src/app/api/provider-observations/passive-model-discovery/
  * passiveModelDiscovery.ts` for the server-side write/inference exclusions.
+ *
+ * Route namespace (R2.2): this was `POST /api/providers/passive-model-
+ * discovery` in R2/R2.1, but `/api/providers/*` classifies every mutating
+ * verb as `admin` (`ADMIN_MUTATION_PREFIXES`), so the live R2.1 proof against
+ * Shadow got a `403 AUTH_SCOPE` before the handler ever ran — Jarvis's
+ * management credential is deliberately not `admin`. `/api/provider-
+ * observations/*` sits outside that prefix, so this POST needs only the
+ * default mutation scope (`write` for a CLI access token). The old path is
+ * no longer served.
  */
 export type ShadowPassiveDiscoveryStatus =
   | "OK"
@@ -421,14 +431,17 @@ export async function fetchShadowPassiveDiscovery(
   assertShadowManagementBaseUrl(deps.baseUrl);
   let response: Response;
   try {
-    response = await deps.fetchImpl(`${deps.baseUrl}/api/providers/passive-model-discovery`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${deps.getAuthToken()}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(connectionIds && connectionIds.length > 0 ? { connectionIds } : {}),
-    });
+    response = await deps.fetchImpl(
+      `${deps.baseUrl}/api/provider-observations/passive-model-discovery`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${deps.getAuthToken()}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(connectionIds && connectionIds.length > 0 ? { connectionIds } : {}),
+      }
+    );
   } catch {
     return { ok: false, status: null, error: "network_error" };
   }

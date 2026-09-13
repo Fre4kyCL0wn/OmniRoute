@@ -1,5 +1,6 @@
 /**
- * POST /api/providers/passive-model-discovery (O9-F3.5 A7.1 "R2").
+ * POST /api/provider-observations/passive-model-discovery (O9-F3.5 A7.1 "R2",
+ * relocated in "R2.2").
  *
  * Management-authenticated, credential-boundary-safe passive discovery:
  * performs a read-only provider model-CATALOG request (never a chat/
@@ -16,6 +17,18 @@
  * PASSIVE DISCOVERY != AUTO-SYNC: no synced/custom model write, no Auto-Sync
  * trigger, no `autoFetchModels` mutation, no provider observation inventory
  * write. See `passiveModelDiscovery.ts` for the exact writer-exclusion list.
+ *
+ * Namespace (R2.2): this route was moved out of `/api/providers/*` and into
+ * `/api/provider-observations/*` so it is no longer classified by
+ * `ADMIN_MUTATION_PREFIXES` (`src/server/authz/accessScopes.ts`). Passive
+ * discovery is an observation/control-plane read, not provider
+ * administration (add/delete/credential-rotate a connection); requiring
+ * `admin` for it was an authorization-namespace mismatch, not an intentional
+ * security boundary. Under this route a POST needs only the default
+ * mutation scope (`write` for a CLI access token, `manage` for an API key) —
+ * `/api/providers/*` itself keeps requiring `admin` for every mutating verb,
+ * unchanged. See `docs/architecture/AUTHZ_GUIDE.md` (Passive observation vs.
+ * provider administration).
  */
 import { NextResponse } from "next/server";
 import { z } from "zod";

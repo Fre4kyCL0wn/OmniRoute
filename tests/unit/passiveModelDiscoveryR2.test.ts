@@ -16,7 +16,7 @@ import {
   runPassiveModelDiscovery,
   type PassiveDiscoveryConnectionInput,
   type PassiveDiscoveryDeps,
-} from "../../src/app/api/providers/passive-model-discovery/passiveModelDiscovery.ts";
+} from "../../src/app/api/provider-observations/passive-model-discovery/passiveModelDiscovery.ts";
 import type { ConfiguredCatalogPageFetch } from "../../src/app/api/providers/[id]/models/discovery/configuredCatalogFetch.ts";
 import { FetchTimeoutError } from "../../src/shared/utils/fetchTimeout.ts";
 
@@ -282,13 +282,16 @@ test("J/K/L: a raw catalog entry with rich provider metadata is returned unmodif
 test("O: source contains no writer call (persist/replace/custom/managed/alias/AutoSync/Combo)", () => {
   const source = readFileSync(
     new URL(
-      "../../src/app/api/providers/passive-model-discovery/passiveModelDiscovery.ts",
+      "../../src/app/api/provider-observations/passive-model-discovery/passiveModelDiscovery.ts",
       import.meta.url
     ),
     "utf8"
   );
   const routeSource = readFileSync(
-    new URL("../../src/app/api/providers/passive-model-discovery/route.ts", import.meta.url),
+    new URL(
+      "../../src/app/api/provider-observations/passive-model-discovery/route.ts",
+      import.meta.url
+    ),
     "utf8"
   );
   // Only real call-sites (`name(`) or SQL-mutation keywords count — doc
@@ -319,7 +322,7 @@ test("O: source contains no writer call (persist/replace/custom/managed/alias/Au
 test("P: source performs only a models-catalog GET/POST through fetchConfiguredProviderCatalog — no chat/completions/embeddings/messages endpoint literal", () => {
   const source = readFileSync(
     new URL(
-      "../../src/app/api/providers/passive-model-discovery/passiveModelDiscovery.ts",
+      "../../src/app/api/provider-observations/passive-model-discovery/passiveModelDiscovery.ts",
       import.meta.url
     ),
     "utf8"
