@@ -361,6 +361,140 @@ export function buildObservationInventoryFromShadowObservedModels(
 }
 
 // ---------------------------------------------------------------------------
+// Live passive discovery snapshot (R2) — outbound provider catalog requests
+// ---------------------------------------------------------------------------
+
+/**
+ * O9-F3.5 A7.1 "R2" — passive provider model discovery. Unlike
+ * `fetchShadowObservedModels` (R1, a pure local read), calling
+ * `POST /api/providers/passive-model-discovery` makes Shadow itself perform a
+ * real outbound provider model-CATALOG request (never inference) using that
+ * connection's own stored credential. This adapter never receives or forwards
+ * that credential — only `providerId`/`connectionId`/`status`/raw `models`
+ * cross the boundary. See `src/app/api/providers/passive-model-discovery/
+ * passiveModelDiscovery.ts` for the server-side write/inference exclusions.
+ */
+export type ShadowPassiveDiscoveryStatus =
+  | "OK"
+  | "UNSUPPORTED"
+  | "INACTIVE"
+  | "NO_CREDENTIAL"
+  | "AUTH_FAILED"
+  | "RATE_LIMITED"
+  | "TIMEOUT"
+  | "UPSTREAM_ERROR"
+  | "NETWORK_ERROR"
+  | "MALFORMED_RESPONSE";
+
+export interface ShadowPassiveDiscoveryConnectionResult {
+  providerId: string;
+  connectionId: string;
+  status: ShadowPassiveDiscoveryStatus;
+  models: readonly unknown[];
+}
+
+export interface ShadowPassiveDiscoverySnapshot {
+  fetchedAt: string;
+  connections: readonly ShadowPassiveDiscoveryConnectionResult[];
+}
+
+function mapRawPassiveDiscoveryConnection(
+  raw: unknown
+): ShadowPassiveDiscoveryConnectionResult | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.providerId !== "string" || r.providerId.trim() === "") return null;
+  if (typeof r.connectionId !== "string" || r.connectionId.trim() === "") return null;
+  if (typeof r.status !== "string") return null;
+  return {
+    providerId: r.providerId,
+    connectionId: r.connectionId,
+    status: r.status as ShadowPassiveDiscoveryStatus,
+    models: Array.isArray(r.models) ? r.models : [],
+  };
+}
+
+export async function fetchShadowPassiveDiscovery(
+  deps: ShadowClientDeps,
+  connectionIds?: readonly string[]
+): Promise<ShadowReadResult<ShadowPassiveDiscoverySnapshot>> {
+  assertShadowManagementBaseUrl(deps.baseUrl);
+  let response: Response;
+  try {
+    response = await deps.fetchImpl(`${deps.baseUrl}/api/providers/passive-model-discovery`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${deps.getAuthToken()}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(connectionIds && connectionIds.length > 0 ? { connectionIds } : {}),
+    });
+  } catch {
+    return { ok: false, status: null, error: "network_error" };
+  }
+  if (!response.ok) {
+    return { ok: false, status: response.status, error: `http_${response.status}` };
+  }
+  let data: { fetchedAt?: unknown; connections?: unknown };
+  try {
+    data = await response.json();
+  } catch {
+    return { ok: false, status: response.status, error: "invalid_json" };
+  }
+  if (typeof data.fetchedAt !== "string" || !Array.isArray(data.connections)) {
+    return { ok: false, status: null, error: "malformed_response" };
+  }
+  const connections: ShadowPassiveDiscoveryConnectionResult[] = [];
+  for (const item of data.connections) {
+    const mapped = mapRawPassiveDiscoveryConnection(item);
+    if (mapped) connections.push(mapped);
+  }
+  return { ok: true, data: { fetchedAt: data.fetchedAt, connections } };
+}
+
+/** Distinct from R1's own refresh-source label — this IS a live upstream probe, R1's is not. */
+const SHADOW_PASSIVE_DISCOVERY_SOURCE = "shadow-passive-discovery-endpoint";
+
+/**
+ * Pure merge: folds a live R2 passive-discovery snapshot into an existing
+ * (typically R1-built) per-connection inventory map. Reuses A2's own
+ * `applyObservationRefresh` as the single merge rule — a connection's R1
+ * inventory becomes the `previous` argument, so a model both R1 and R2 agree
+ * on stays `currentlyObserved: true` (keeping R1's `firstObservedAt`), and a
+ * model R1 had but this R2 read no longer lists correctly flips to
+ * `currentlyObserved: false` (never silently kept alive). A connection R2
+ * could not read (`status !== "OK"`) applies as a failed refresh — R1's last
+ * good models are preserved untouched, exactly like a real refresh outage.
+ * Never merges across connections or providers.
+ */
+export function mergePassiveDiscoveryIntoObservationInventory(
+  previousByConnection: ReadonlyMap<string, ProviderObservationInventory>,
+  snapshot: ShadowPassiveDiscoverySnapshot,
+  nowMs: number
+): ReadonlyMap<string, ProviderObservationInventory> {
+  const observedAt = new Date(nowMs).toISOString();
+  const merged = new Map(previousByConnection);
+  for (const connection of snapshot.connections) {
+    const previous = previousByConnection.get(connection.connectionId) ?? null;
+    const outcome =
+      connection.status === "OK"
+        ? ({ ok: true, items: connection.models } as const)
+        : ({ ok: false, reason: connection.status } as const);
+    merged.set(
+      connection.connectionId,
+      applyObservationRefresh(previous, {
+        providerId: connection.providerId,
+        connectionId: connection.connectionId,
+        source: SHADOW_PASSIVE_DISCOVERY_SOURCE,
+        observedAt,
+        outcome,
+      })
+    );
+  }
+  return merged;
+}
+
+// ---------------------------------------------------------------------------
 // Combined live snapshot — fails closed as a whole on ANY partial failure
 // ---------------------------------------------------------------------------
 
