@@ -450,6 +450,24 @@ const OBSERVATION_FILES = [
   "src/app/api/providers/[id]/models/discovery/configuredCatalogFetch.ts",
   "src/app/api/providers/[id]/models/discovery/providerObservationRefresh.ts",
 ];
+/**
+ * (O9-F3.5 A7.1 "R4.2") The one and only authorized BRIDGE between the
+ * observation/evidence read path above and the real activation writer.
+ * Deliberately NOT added to `OBSERVATION_FILES`: that list's own invariant
+ * (asserted by `ACTIVATION_WRITERS` just below) is "never references an
+ * activation writer", which does not apply here — these two files exist
+ * specifically to read observation evidence, run the R4 planner
+ * (`oneModelActivationPlanner.ts`), and execute exactly one canonical
+ * `replaceSyncedAvailableModelsForConnection` write. That bridge is the
+ * entire purpose of R4.2 (closing the gap R4.1 proved: the R4 planner had no
+ * authenticated caller). They are exempted from the second, closed-world
+ * check below only — every other file in the tree is still forbidden from
+ * touching either side.
+ */
+const AUTHORIZED_ACTIVATION_BRIDGE_FILES = [
+  "src/lib/providerOnboarding/activationOrchestrator.ts",
+  "src/app/api/provider-observations/activate-model/route.ts",
+];
 const ACTIVATION_WRITERS = [
   "replaceSyncedAvailableModelsForConnection",
   "persistCanonicalSyncedAvailableModels",
@@ -483,8 +501,10 @@ test("I: the observation write path has no activation writer and no routing cons
       assert.equal(src.includes(writer), false, `${file} references ${writer}`);
     }
   }
-  // Nothing outside the observation path reads the inventory or imports it.
-  const allowed = new Set(OBSERVATION_FILES.map((f) => join(ROOT, f)));
+  // Nothing outside the observation path (or the one authorized R4.2 bridge) reads the inventory or imports it.
+  const allowed = new Set(
+    [...OBSERVATION_FILES, ...AUTHORIZED_ACTIVATION_BRIDGE_FILES].map((f) => join(ROOT, f))
+  );
   const markers = ["providerObservedModels", "providerOnboarding/", "providerObservationRefresh"];
   for (const file of [...walk(join(ROOT, "src")), ...walk(join(ROOT, "open-sse"))]) {
     if (allowed.has(file)) continue;
