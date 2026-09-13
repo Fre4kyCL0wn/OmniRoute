@@ -772,8 +772,16 @@ export interface RunShadowManagedComboPipelineInput {
    * pool" — R0 has no safe read source for this yet (documented at the top
    * of this file), so the live default is always `false`; tests inject a
    * resolver to prove the `ALREADY_ROUTABLE` path.
+   *
+   * O9-F3.5 A7.1 "R4": takes `connectionId` alongside `canonicalModelId` so a
+   * model already routable on one connection can never leak `true` onto a
+   * different connection that happens to share the same provider/model id
+   * (`canonicalModelId` alone — `${providerId}/${providerModelId}` — carries
+   * no connection identity). `oneModelActivationPlanner.ts` (R4) is the
+   * intended real-world resolver source once wired: it reads a specific
+   * connection's synced-model list and answers per exact connection.
    */
-  alreadyRoutableResolver?: (canonicalModelId: string) => boolean;
+  alreadyRoutableResolver?: (canonicalModelId: string, connectionId: string) => boolean;
 }
 
 export function runShadowManagedComboPipeline(
@@ -830,7 +838,10 @@ export function runShadowManagedComboPipeline(
           runtimeState,
           activation,
           connectionActive: connection.isActive,
-          alreadyRoutable: alreadyRoutable(resolved.record.canonicalModelId),
+          alreadyRoutable: alreadyRoutable(
+            resolved.record.canonicalModelId,
+            connection.connectionId
+          ),
         })
       );
       candidatesBuilt++;

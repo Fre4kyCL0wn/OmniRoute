@@ -537,7 +537,8 @@ test("U: real A2 evidence join + canonicalization — nvidia/moonshotai/kimi-k3 
             note: null,
           }
         : null,
-    alreadyRoutableResolver: (canonicalModelId) => canonicalModelId === "nvidia/moonshotai/kimi-k3",
+    alreadyRoutableResolver: (canonicalModelId, connectionId) =>
+      canonicalModelId === "nvidia/moonshotai/kimi-k3" && connectionId === "conn-nv",
   });
 
   assert.equal(artifact.pipelineSummary.connections[0].observationSummary.modelsObserved, 1);
