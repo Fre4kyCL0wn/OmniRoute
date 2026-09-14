@@ -1,3 +1,9 @@
+---
+title: "Historical Notes & Completed Phase References"
+version: 3.8.51
+lastUpdated: 2026-09-14
+---
+
 # Historical Notes & Completed Phase References
 
 Moved from AGENTS.md to keep agent instructions under 40k characters.

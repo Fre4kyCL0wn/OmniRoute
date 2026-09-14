@@ -1,7 +1,7 @@
 ---
 title: "Environment Variables Reference"
-version: 3.8.50
-lastUpdated: 2026-08-18
+version: 3.8.51
+lastUpdated: 2026-09-14
 ---
 
 # Environment Variables Reference
@@ -303,6 +303,12 @@ OmniRoute provides a two-layer defense: request-side injection scanning and resp
 | `OMNIROUTE_PREFER_CLAUDE_CODE_FOR_UNPREFIXED_CLAUDE_MODELS` | `false`                      | `open-sse/services/model.ts`        | Opt-in: route bare `claude-*` model IDs from Claude Code clients through the Claude Code OAuth account instead of requiring a provider prefix. Explicit provider prefixes still win. Also configurable via a dashboard toggle on the Claude provider page. |
 | `COMBO_CONCURRENCY_PER_MODEL`                               | `3`                          | `open-sse/services/comboConfig.ts`  | Per-model concurrency cap for round-robin combos (#9100). The round-robin combo semaphore was hard-capped at 3 concurrent requests per model with no override, serializing higher-concurrency traffic behind that cap. Validated to `>= 1`, clamped to `<= 32`.                                          |
 | `DISABLE_CONTEXT_WINDOW_CHECKS`                             | `false`                      | `open-sse/handlers/chatCore.ts`     | Dangerous opt-in that skips OmniRoute's local context-window / max-input-token check for direct single-model requests. Upstream providers still enforce their actual limits; prompt compression and the model's own output-token cap remain active. Effective precedence is Feature Flags DB override > environment variable > default; no restart is required.                                          |
+
+| `OMNIROUTE_JARVIS_AUTONOMOUS_RECONCILIATION` | `false` | `src/lib/jobs/jarvisManagedFreeCodingReconcileJobConfig.ts` | Opt-in R4.7 autonomous reconciliation for `jarvis-managed/free-coding`. When disabled, the Jarvis-managed loop is not registered. |
+| `OMNIROUTE_JARVIS_AUTONOMOUS_RECONCILIATION_INTERVAL_MS` | `600000` | `src/lib/jobs/jarvisManagedFreeCodingReconcileJobConfig.ts` | R4.7 reconcile interval in milliseconds. Parsed as an integer and bounded to 60000-3600000 ms. |
+| `OMNIROUTE_JARVIS_AUTONOMOUS_MAX_ACTIVATIONS_PER_RUN` | `3` | `src/lib/jobs/jarvisManagedFreeCodingReconcileJobConfig.ts` | Maximum strict-zero-cost pending routes R4.7 may auto-activate per cycle. Bounded to 0-10. |
+| `OMNIROUTE_JARVIS_AUTO_SUPERVISOR` | `false` | `src/lib/jobs/jarvisManagedFreeCodingReconcileJobConfig.ts` | Opt-in R4.8 `jarvis-auto` supervisor reconciliation after the R4.7 managed-pool cycle. |
+| `OMNIROUTE_JARVIS_AUTO_FALLBACK_MODEL` | _(unset)_ | `src/lib/jobs/jarvisManagedFreeCodingReconcileJobConfig.ts` | Optional operator-verified independent `<provider/model>` fallback used after the dynamic strict-free child. It is not promoted to strict-zero-cost evidence. |
 
 ---
 

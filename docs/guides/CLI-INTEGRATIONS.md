@@ -1,7 +1,7 @@
 ---
 title: "CLI Integrations — point any coding CLI at OmniRoute"
-version: 3.8.50
-lastUpdated: 2026-08-18
+version: 3.8.51
+lastUpdated: 2026-09-14
 ---
 
 # CLI Integrations
@@ -49,6 +49,27 @@ per-tool deep dives:
 - [Remote Mode](./REMOTE-MODE.md) — drive a remote OmniRoute (VPS / Tailnet) from your laptop
 - [VS Code Copilot Chat](./VSCODE-COPILOT.md) — the OmniCopilot extension; it can also run these
   `setup-*` commands for you from inside the editor
+
+---
+
+## Jarvis/O9 Shadow: `jarvis-auto` supervisor
+
+The Jarvis fork can expose a stable Claude Code entrypoint named `claude/combo/jarvis-auto`.
+This is an opt-in Shadow deployment feature, not OmniRoute's upstream default route. The supervisor
+first executes the provider-agnostic `jarvis-managed/free-coding` Combo maintained by R4.7. If that
+strict-free child cannot serve because of quota, cooldown, or provider availability, `jarvis-auto`
+can fall through to one operator-configured independent model route.
+
+The runtime loop is enabled with `OMNIROUTE_JARVIS_AUTONOMOUS_RECONCILIATION=true`; the supervisor
+is separately enabled with `OMNIROUTE_JARVIS_AUTO_SUPERVISOR=true`. Its optional fallback is set by
+`OMNIROUTE_JARVIS_AUTO_FALLBACK_MODEL=<provider/model>`. The supervisor itself contains no provider
+allowlist: newly qualified providers enter through the dynamically reconciled strict-free child.
+
+On the validated Shadow host, the Claude wrapper defaults both `ANTHROPIC_MODEL` and
+`ANTHROPIC_SMALL_FAST_MODEL` to `claude/combo/jarvis-auto`; an explicit Claude Code `--model` still
+wins. Live validation on 2026-09-14 used the normal Claude Code request envelope with 21 tools: an
+OpenRouter daily-free 429 produced a persisted connection cooldown and the same request completed
+through the independent fallback. The next request skipped the cooled-down connection locally.
 
 ---
 

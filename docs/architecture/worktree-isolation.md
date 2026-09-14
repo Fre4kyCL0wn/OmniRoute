@@ -1,3 +1,9 @@
+---
+title: "Worktree Isolation — Operational Procedure"
+version: 3.8.51
+lastUpdated: 2026-09-14
+---
+
 # Worktree Isolation — Operational Procedure
 
 Durable reference for the MANDATORY worktree isolation rules (Hard Rule #19 / #22).

@@ -32,20 +32,20 @@ Single test: `node --import tsx/esm --test tests/unit/your-file.test.ts`. Full m
 
 **OmniRoute** — unified AI proxy/router. One endpoint, 356 LLM providers, auto-fallback.
 
-| Layer         | Location                | Purpose                                                |
-| ------------- | ----------------------- | ------------------------------------------------------ |
-| API Routes    | `src/app/api/v1/`       | Next.js App Router entry points                        |
-| Handlers      | `open-sse/handlers/`    | Request processing (chat, embeddings, …)               |
-| Executors     | `open-sse/executors/`   | Provider-specific HTTP dispatch                         |
-| Translators   | `open-sse/translator/`  | Format conversion (OpenAI ↔ Claude ↔ Gemini)            |
-| Transformer   | `open-sse/transformer/` | Responses API ↔ Chat Completions                       |
-| Services      | `open-sse/services/`    | Combo routing, rate limits, caching, …                 |
-| Database      | `src/lib/db/`           | SQLite domain modules (169 migrations)                  |
-| Domain/Policy | `src/domain/`           | Policy engine, cost rules, fallback logic              |
-| MCP Server    | `open-sse/mcp-server/`  | 110 tools, 3 transports, 33 scopes                     |
-| A2A Server    | `src/lib/a2a/`          | JSON-RPC 2.0 agent protocol                            |
-| Skills        | `src/lib/skills/`       | Extensible skill framework                              |
-| Memory        | `src/lib/memory/`       | Persistent conversational memory                        |
+| Layer         | Location                | Purpose                                      |
+| ------------- | ----------------------- | -------------------------------------------- |
+| API Routes    | `src/app/api/v1/`       | Next.js App Router entry points              |
+| Handlers      | `open-sse/handlers/`    | Request processing (chat, embeddings, …)     |
+| Executors     | `open-sse/executors/`   | Provider-specific HTTP dispatch              |
+| Translators   | `open-sse/translator/`  | Format conversion (OpenAI ↔ Claude ↔ Gemini) |
+| Transformer   | `open-sse/transformer/` | Responses API ↔ Chat Completions             |
+| Services      | `open-sse/services/`    | Combo routing, rate limits, caching, …       |
+| Database      | `src/lib/db/`           | SQLite domain modules (170 migrations)       |
+| Domain/Policy | `src/domain/`           | Policy engine, cost rules, fallback logic    |
+| MCP Server    | `open-sse/mcp-server/`  | 110 tools, 3 transports, 33 scopes           |
+| A2A Server    | `src/lib/a2a/`          | JSON-RPC 2.0 agent protocol                  |
+| Skills        | `src/lib/skills/`       | Extensible skill framework                   |
+| Memory        | `src/lib/memory/`       | Persistent conversational memory             |
 
 Monorepo: `src/` (Next.js 16 app), `open-sse/` (streaming engine workspace), `electron/`,
 `tests/`, `bin/` (CLI entry point). **No global Next.js middleware** — interception is
@@ -65,7 +65,7 @@ Client → /v1/chat/completions → CORS → Zod → auth? → policy → inject
 fill-first, round-robin, p2c, random, least-used, cost-optimized, reset-aware, reset-window,
 headroom, strict-random, auto, lkgp, context-optimized, cache-optimized, context-relay,
 fusion, pipeline). The `fusion` strategy fans out to a panel in parallel, then a judge
-model synthesizes one final answer. Full table + 16-factor Auto-Combo scoring:
+model synthesizes one final answer. Full table + 17-factor Auto-Combo scoring:
 `docs/routing/AUTO-COMBO.md`. Resilience: `docs/architecture/RESILIENCE_GUIDE.md`.
 
 ---
@@ -75,11 +75,11 @@ model synthesizes one final answer. Full table + 16-factor Auto-Combo scoring:
 OmniRoute has three distinct temporary-failure mechanisms. Keep their scope separate when
 debugging routing. Diagram: [resilience-3layers.svg](./docs/diagrams/exported/resilience-3layers.svg).
 
-| Layer                   | Scope                                | Code                                                              |
-| ----------------------- | ------------------------------------ | ----------------------------------------------------------------- |
+| Layer                    | Scope                               | Code                                                                     |
+| ------------------------ | ----------------------------------- | ------------------------------------------------------------------------ |
 | Provider Circuit Breaker | whole provider (`glm`, `openai`, …) | `src/shared/utils/circuitBreaker.ts` → `src/sse/handlers/chatHelpers.ts` |
-| Connection Cooldown     | one provider connection/account/key  | `src/sse/services/auth.ts` → `open-sse/services/accountFallback.ts`         |
-| Model Lockout           | provider + connection + model        | `open-sse/services/accountFallback.ts`                                    |
+| Connection Cooldown      | one provider connection/account/key | `src/sse/services/auth.ts` → `open-sse/services/accountFallback.ts`      |
+| Model Lockout            | provider + connection + model       | `open-sse/services/accountFallback.ts`                                   |
 
 ### Provider Circuit Breaker
 
@@ -136,17 +136,17 @@ Avoids disabling a whole connection when only one model is unavailable or quota-
 
 Read the nearest nested `AGENTS.md` and the linked deep-dive before a non-trivial change.
 
-| Area                               | Location                                                | Start here                                                                |
-| ---------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------- |
-| API routes / streaming handling    | `src/app/api/v1/`, `open-sse/handlers/`                | `docs/architecture/ARCHITECTURE.md`                                       |
-| Provider execution / translation   | `open-sse/executors/`, `open-sse/translator/`           | `docs/architecture/CODEBASE_DOCUMENTATION.md`                             |
-| Routing and resilience             | `open-sse/services/`                                   | `open-sse/services/AGENTS.md`, `docs/routing/AUTO-COMBO.md`                |
-| Database and migrations            | `src/lib/db/`, `src/lib/db/migrations/`                | `src/lib/db/AGENTS.md`                                                    |
-| Domain policy                      | `src/domain/`                                          | `docs/architecture/ARCHITECTURE.md`                                       |
-| MCP and A2A                        | `open-sse/mcp-server/`, `src/lib/a2a/`                 | `docs/frameworks/MCP-SERVER.md`, `docs/frameworks/A2A-SERVER.md`          |
-| Agent features                     | `src/lib/{acp,memory,skills,cloudAgent}/`              | `docs/frameworks/AGENT_PROTOCOLS_GUIDE.md`, `docs/frameworks/SKILLS.md`    |
-| Safety and governance              | `src/lib/{guardrails,compliance}/`, `src/server/authz/` | `docs/security/GUARDRAILS.md`, `docs/architecture/AUTHZ_GUIDE.md`        |
-| Operations                         | `src/mitm/`, tunnels, `electron/`                      | `docs/ops/TUNNELS_GUIDE.md`, `docs/guides/ELECTRON_GUIDE.md`              |
+| Area                             | Location                                                | Start here                                                              |
+| -------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------- |
+| API routes / streaming handling  | `src/app/api/v1/`, `open-sse/handlers/`                 | `docs/architecture/ARCHITECTURE.md`                                     |
+| Provider execution / translation | `open-sse/executors/`, `open-sse/translator/`           | `docs/architecture/CODEBASE_DOCUMENTATION.md`                           |
+| Routing and resilience           | `open-sse/services/`                                    | `open-sse/services/AGENTS.md`, `docs/routing/AUTO-COMBO.md`             |
+| Database and migrations          | `src/lib/db/`, `src/lib/db/migrations/`                 | `src/lib/db/AGENTS.md`                                                  |
+| Domain policy                    | `src/domain/`                                           | `docs/architecture/ARCHITECTURE.md`                                     |
+| MCP and A2A                      | `open-sse/mcp-server/`, `src/lib/a2a/`                  | `docs/frameworks/MCP-SERVER.md`, `docs/frameworks/A2A-SERVER.md`        |
+| Agent features                   | `src/lib/{acp,memory,skills,cloudAgent}/`               | `docs/frameworks/AGENT_PROTOCOLS_GUIDE.md`, `docs/frameworks/SKILLS.md` |
+| Safety and governance            | `src/lib/{guardrails,compliance}/`, `src/server/authz/` | `docs/security/GUARDRAILS.md`, `docs/architecture/AUTHZ_GUIDE.md`       |
+| Operations                       | `src/mitm/`, tunnels, `electron/`                       | `docs/ops/TUNNELS_GUIDE.md`, `docs/guides/ELECTRON_GUIDE.md`            |
 
 ---
 
@@ -254,14 +254,14 @@ Quick pointers:
 
 Deep-dives to read before any non-trivial change:
 
-| Area                                                  | Doc                                                            |
+| Area | Doc |
 | ------------------------------------------------ --- | -------------------------------------------------------------- |
-| Repo / Arch / Engineering                           | `docs/architecture/REPOSITORY_MAP.md`, `ARCHITECTURE.md`, `CODEBASE_DOCUMENTATION.md` |
-| Auto-Combo / Replay / Resilience                      | `docs/routing/AUTO-COMBO.md`, `REASONING_REPLAY.md`, `docs/architecture/RESILIENCE_GUIDE.md` |
+| Repo / Arch / Engineering | `docs/architecture/REPOSITORY_MAP.md`, `ARCHITECTURE.md`, `CODEBASE_DOCUMENTATION.md` |
+| Auto-Combo / Replay / Resilience | `docs/routing/AUTO-COMBO.md`, `REASONING_REPLAY.md`, `docs/architecture/RESILIENCE_GUIDE.md` |
 | Skills / Memory / Radar / Cloud / A2A / MCP / Protocols | `docs/frameworks/SKILLS.md`, `MEMORY.md`, `RADAR.md`, `CLOUD_AGENT.md`, `A2A-SERVER.md`, `MCP-SERVER.md`, `AGENT_PROTOCOLS_GUIDE.md` |
 | Security / Guardrails / Creds / Sanitize / Compliance / Authz / Stealth | `docs/security/GUARDRAILS.md`, `PUBLIC_CREDS.md`, `ERROR_SANITIZATION.md`, `COMPLIANCE.md`, `AUTHZ_GUIDE.md`, `STEALTH_GUIDE.md` |
 | Webhooks / Log-export / Tunnels / Electron / Copilot / Release / Embedded / Quality | `docs/frameworks/WEBHOOKS.md`, `LOG-EXPORT.md`, `docs/ops/TUNNELS_GUIDE.md`, `docs/guides/ELECTRON_GUIDE.md`, `VSCODE-COPILOT.md`, `RELEASE_CHECKLIST.md`, `EMBEDDED-SERVICES.md`, `QUALITY_GATES.md` |
-| API / OpenAPI / Provider catalog                     | `docs/reference/API_REFERENCE.md` + `docs/openapi.yaml`, `PROVIDER_REFERENCE.md` |
+| API / OpenAPI / Provider catalog | `docs/reference/API_REFERENCE.md` + `docs/openapi.yaml`, `PROVIDER_REFERENCE.md` |
 
 ---
 
@@ -351,6 +351,7 @@ git push -u origin feat/your-feature
 `sse`, `oauth`, `dashboard`, `api`, `cli`, `docker`, `ci`, `mcp`, `a2a`, `memory`, `skills`.
 
 **Husky hooks**:
+
 - **pre-commit**: lint-staged + `check-docs-sync` + `check:any-budget:t11` +
   `check:tracked-artifacts`.
 - **pre-push**: intentionally light (PATH/npm sanity). `any-budget` + `tracked-artifacts`
@@ -369,19 +370,21 @@ Full procedure → `docs/architecture/worktree-isolation.md`. Mandatory rules pr
 - Work/commit/push/PR from inside worktree; tear down only your own by name; never
   blanket-delete `fix/*`/`feat/*`. End session on branch it started (`release/vX.Y.Z`).
 - Before merging any PR you did not create: `git worktree list` + `gh pr view <N> --json
-  state,headRefOid`. Only owning session merges its in-flight PR.
+state,headRefOid`. Only owning session merges its in-flight PR.
 - Never `git stash` / `git stash pop` — operates on shared repo object store, not
   per-worktree working tree (2026-07-02 `#5923`/`#2296` leak; same class through subagent).
   Compare with `git show <ref>:<path>`; never stash to "get it clean". Put this verbatim
   in every subagent that touches git.
 
 Quick starter:
+
 ```bash
 BASE_BRANCH="release/vX.Y.Z"; TASK="feat/your-feature"
 git fetch origin "$BASE_BRANCH"
 git worktree add ".claude/worktrees/${TASK##*/}" -b "$TASK" "origin/$BASE_BRANCH"
 cd ".claude/worktrees/${TASK##*/}"; cp -al "$(git -C <main> rev-parse --show-toplevel)/node_modules" node_modules
 ```
+
 Full procedure and sync-back rules (`git merge-base --is-ancestor`, never squash-merge
 release sync-backs, base-green check with `gh issue list --label base-red`):
 `docs/architecture/worktree-isolation.md`.
@@ -531,7 +534,7 @@ number required. Stale entries caught by Fase 6A.3 enforcement.
     a freeze is active: **NEVER merge into the frozen `release/vX.Y.Z`**; resolve the
     ACTIVE development branch (highest `release/v*` by semver, normally `release/vX+1`,
     announced in a freeze-issue comment) and retarget the PR there (`gh pr edit <N> --base
-    release/vX+1`, then VERIFY with `gh pr view <N> --json baseRefName` — the edit fails
+release/vX+1`, then VERIFY with `gh pr view <N> --json baseRefName` — the edit fails
     silently). **HOLD only when the highest release/v\* branch IS the frozen one** — leave
     the PR ready and open, tell the operator, resume when the next branch appears or the
     freeze lifts. Just-shipped fixes reach `release/vX+1` via the Phase 5 sync-back
@@ -557,7 +560,7 @@ number required. Stale entries caught by Fase 6A.3 enforcement.
       tree — so a stash pushed or popped in one session can silently clobber or resurrect
       another parallel session's uncommitted changes. To compare working changes against a
       base ref **without** stashing, use `git show <ref>:<path>` or `git diff <ref> --
-      <path>`; to confirm a typecheck/lint error is pre-existing on the base, inspect the
+<path>`; to confirm a typecheck/lint error is pre-existing on the base, inspect the
       base ref directly (`git show origin/release/vX.Y.Z:<path>`) — never stash your tree
       away to "get it clean". **Put this ban verbatim in the prompt of every subagent
       that touches git** (agents don't inherit this file's context — the recurrence was a
@@ -568,7 +571,7 @@ number required. Stale entries caught by Fase 6A.3 enforcement.
       **off-limits — HOLD**, and let the owning session merge it. **Before** merging or
       pushing to any PR you did not create _this_ session, run `git worktree list` to
       check for a matching in-flight worktree and re-check `gh pr view <N> --json
-      state,headRefOid`. Only the owning session merges its own in-flight PR; mid-flight
+state,headRefOid`. Only the owning session merges its own in-flight PR; mid-flight
       merges race the owner and re-trigger the exact commit/CHANGELOG races Rules #19 and
       #21 guard against.
 23. **`_tasks/` é INTOCÁVEL como estrutura — append/edit-only.** É um repositório git
@@ -583,7 +586,7 @@ number required. Stale entries caught by Fase 6A.3 enforcement.
     é o backup real; (d) repetir esta proibição VERBATIM no prompt de todo subagente que
     toque git; (e) se `_tasks` aparecer como symlink quebrado, NÃO commitar nada —
     restaurar do remote e avisar o operador. O gate `check:tracked-artifacts` (pre-commit
-    + CI) bloqueia `_tasks` rastreado em qualquer forma.
+    - CI) bloqueia `_tasks` rastreado em qualquer forma.
 
 ---
 

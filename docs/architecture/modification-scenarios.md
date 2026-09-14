@@ -1,3 +1,9 @@
+---
+title: "Common Modification Scenarios — Full Procedure Reference"
+version: 3.8.51
+lastUpdated: 2026-09-14
+---
+
 # Common Modification Scenarios — Full Procedure Reference
 
 Detailed steps for the scenarios listed in AGENTS.md. Keep the AGENTS.md summary
@@ -94,13 +100,13 @@ Full guide: `docs/frameworks/EMBEDDED-SERVICES.md`.
 
 ## Adding a Guardrail / Eval / Skill / Webhook / Log-export Destination
 
-| What              | Code location                                           | Docs                              |
-| ----------------- | ------------------------------------------------------- | --------------------------------- |
-| Guardrail         | `src/lib/guardrails/`                                  | `docs/security/GUARDRAILS.md`     |
-| Eval suite        | `src/lib/evals/`                                       | `docs/frameworks/EVALS.md`        |
-| Skill (sandbox)   | `src/lib/skills/`                                      | `docs/frameworks/SKILLS.md`       |
-| Webhook event     | `src/lib/webhookDispatcher.ts`                          | `docs/frameworks/WEBHOOKS.md`     |
-| Log-export dest.  | `src/lib/logExport/destinations/<name>.ts` + registry line | `docs/frameworks/LOG-EXPORT.md` |
+| What             | Code location                                              | Docs                            |
+| ---------------- | ---------------------------------------------------------- | ------------------------------- |
+| Guardrail        | `src/lib/guardrails/`                                      | `docs/security/GUARDRAILS.md`   |
+| Eval suite       | `src/lib/evals/`                                           | `docs/frameworks/EVALS.md`      |
+| Skill (sandbox)  | `src/lib/skills/`                                          | `docs/frameworks/SKILLS.md`     |
+| Webhook event    | `src/lib/webhookDispatcher.ts`                             | `docs/frameworks/WEBHOOKS.md`   |
+| Log-export dest. | `src/lib/logExport/destinations/<name>.ts` + registry line | `docs/frameworks/LOG-EXPORT.md` |
 
 For log-export: runner, REST layer and dashboard form all read the registry — nothing
 else changes.

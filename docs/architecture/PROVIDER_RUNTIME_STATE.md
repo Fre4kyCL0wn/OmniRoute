@@ -1,5 +1,7 @@
 ---
 title: "O9-F3.3 Provider Runtime State"
+version: 3.8.51
+lastUpdated: 2026-09-14
 ---
 
 # O9-F3.3 Provider Runtime State — Phase Status & Architecture
@@ -1522,7 +1524,7 @@ The runtime source of truth is `open-sse/services/combo/strategyDispatch.ts`'s
 | `cache-optimized`          | `applyStrategyOrdering` → prompt-cache-affinity ordering                                                                                                                                                                                                                                                                      | reorder (+ target expansion)                                  |
 | `quota-share`              | `applyStrategyOrdering` → `selectQuotaShareTarget` (DRR + P2C in-flight + per-model bucket + per-connection concurrency)                                                                                                                                                                                                      | reorder + in-flight reservation                               |
 | `lkgp`                     | `applyStrategyOrdering` (move last-known-good to front)                                                                                                                                                                                                                                                                       | reorder                                                       |
-| `auto`                     | `resolveAutoStrategyOrder` (`combo/resolveAutoStrategy.ts`) → `buildAutoCandidates` + tool/context pre-filters + `scoreAutoTargets` / `selectAutoProvider` (`autoCombo/engine.ts`, 16-factor scoring, `autoCombo/scoring.ts`) or an explicit `routerStrategy.ts` router (`rules`/`score`/`cost`/`latency`/`sla-aware`/`lkgp`) | candidate-build + score, still sourced from `eligibleTargets` |
+| `auto`                     | `resolveAutoStrategyOrder` (`combo/resolveAutoStrategy.ts`) → `buildAutoCandidates` + tool/context pre-filters + `scoreAutoTargets` / `selectAutoProvider` (`autoCombo/engine.ts`, 17-factor scoring, `autoCombo/scoring.ts`) or an explicit `routerStrategy.ts` router (`rules`/`score`/`cost`/`latency`/`sla-aware`/`lkgp`) | candidate-build + score, still sourced from `eligibleTargets` |
 | `fusion`                   | `tryFusionDispatch` (`combo/dispatchPrelude.ts`) → `handleFusionChat` (`fusion.ts`) — fan-out panel + judge synthesis                                                                                                                                                                                                         | fan-out, still sourced from `resolveComboTargets`             |
 | `pipeline`                 | `tryPipelineDispatch` (`combo/dispatchPrelude.ts`) → `handlePipelineChat` (`pipeline.ts`) — staged output→input chain                                                                                                                                                                                                         | staged, still sourced from `resolveComboTargets`              |
 
@@ -2328,3 +2330,37 @@ before R4.6 is allowed to write a Combo. The controlled apply layer therefore
 retains its existing ownership, drift, fingerprint, read-back and no-delete
 protections. A blocked or unverifiable apply is recorded as a failed job run
 instead of being retried as a different or weaker policy.
+
+## Jarvis Auto Supervisor (O9-F3.5 A7.1 "R4.8")
+
+R4.8 adds one stable coding entrypoint above the R4.7-managed strict-free pool: the native Combo
+`jarvis-auto`. Its first member is a `combo-ref` to `jarvis-managed/free-coding`, so the supervisor
+does not copy provider/model membership and does not need a provider allowlist. Any provider that a
+later R4.7 cycle discovers, proves safe, activates, and adds to the managed child is inherited by
+`jarvis-auto` automatically.
+
+The supervisor is independently opt-in with `OMNIROUTE_JARVIS_AUTO_SUPERVISOR=true`. An optional
+operator-verified independent fallback is supplied through
+`OMNIROUTE_JARVIS_AUTO_FALLBACK_MODEL=<provider/model>`. The fallback is deliberately not relabelled
+as strict-zero-cost evidence; it is a separate resilience route after the strict-free child. Native
+`nestedComboMode: "execute"` lets OmniRoute execute that child as a real Combo rather than flattening
+or duplicating its membership.
+
+R4.8 reconciliation is ownership/fingerprint protected and idempotent. On the 2026-09-14 Shadow
+deployment the first autonomous startup created `jarvis-auto` with fingerprint `182e2a20`; the next
+startup produced `NO_CHANGE` and left `updated_at` untouched. A related recovery regression was fixed
+at the same time: when a Jarvis-managed child had been hidden because no safe route existed, recovery
+of an otherwise identical safe set now produces an update that clears `isHidden` instead of a false
+`NO_CHANGE`.
+
+The live Claude Code proof used `claude/combo/jarvis-auto` with the normal 21-tool request envelope.
+The strict child reached OpenRouter North Mini, received `429 free-models-per-day`, persisted a
+connection-scoped one-hour cooldown, and the supervisor completed the same request through the
+configured independent Gemini fallback. A second request through the default `claude` launcher saw
+the persisted cooldown, skipped the OpenRouter connection locally, and succeeded through the fallback
+without another failed upstream call.
+
+Shadow enables R4.7/R4.8 explicitly; Production has none of these opt-in variables and remained on
+the unchanged production container/image throughout the proof. The focused R4.x audit after live
+activation passed 100/100 tests, O9 typecheck with zero errors, core typecheck, full ESLint, and
+`git diff --check`.
