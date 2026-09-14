@@ -83,9 +83,20 @@ const AGENTROUTER_RULES: UpstreamStatusRestatementRule[] = [
   },
 ];
 
+const GROQ_RULES: UpstreamStatusRestatementRule[] = [
+  {
+    id: "groq-tpm-misstatus",
+    fromStatuses: new Set([413]),
+    toStatus: 429,
+    textMarkers: ["tokens per minute"],
+    defaultRetryAfterMs: 60_000,
+  },
+];
+
 /** Provider id (lowercase) → ordered rules; first match wins. */
 export const statusRestatementRegistry = new Map<string, UpstreamStatusRestatementRule[]>([
   ["agentrouter", AGENTROUTER_RULES],
+  ["groq", GROQ_RULES],
 ]);
 
 function stringifyBody(body: unknown): string {
