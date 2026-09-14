@@ -153,6 +153,19 @@ export function isToolBearingRequest(body: Body): boolean {
   return body.tool_choice !== "none";
 }
 
+async function isRetryableToolTargetResponse(response: Response): Promise<boolean> {
+  if ([402, 408, 429, 500, 502, 503, 504].includes(response.status)) return true;
+  if (response.status !== 400) return false;
+
+  const text = await response
+    .clone()
+    .text()
+    .catch(() => "");
+  return /\bmodel\b.{0,80}\b(?:is\s+)?(?:unavailable|not\s+available|retired|deprecated)\b/i.test(
+    text
+  );
+}
+
 type Sentinel = { __timeout?: true; __error?: unknown };
 
 // Resolve a Response (or sentinel) within ms; the loser keeps running but is ignored.
@@ -368,7 +381,6 @@ export async function handleFusionChat({
   // decision, but retain bounded same-request failover when the preferred
   // model is temporarily unavailable (#6771).
   if (isToolBearingRequest(body)) {
-    const retryableStatuses = new Set([402, 408, 429, 500, 502, 503, 504]);
     const firstTarget: FusionModel =
       judgeTarget && getFusionModelString(judgeTarget) === judge ? judgeTarget : judge;
     const candidates: FusionModel[] = [];
@@ -396,7 +408,8 @@ export async function handleFusionChat({
       lastResponse = response;
 
       if (response.ok) return response;
-      if (!retryableStatuses.has(response.status) || i === candidates.length - 1) {
+      const retryable = await isRetryableToolTargetResponse(response);
+      if (!retryable || i === candidates.length - 1) {
         return response;
       }
 

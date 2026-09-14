@@ -68,6 +68,33 @@ test("tool-bearing fusion does not duplicate an explicit judge already present i
   assert.deepEqual(calls, ["panel/a", "panel/b"]);
 });
 
+test("tool-bearing fusion treats explicit model-unavailable 400 as target-local and falls through", async () => {
+  const calls: string[] = [];
+  const handleSingleModel = async (_body: Body, model: string) => {
+    calls.push(model);
+    if (model === "model/a") {
+      return new Response("Error from provider: Upstream request failed: Model is unavailable.", {
+        status: 400,
+      });
+    }
+    return new Response(
+      JSON.stringify({ model, choices: [{ message: { role: "assistant", content: "ok" } }] }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  };
+
+  const res = await handleFusionChat({
+    body: { messages: [{ role: "user", content: "hi" }], tools: TOOLS },
+    models: ["model/a", "model/b"],
+    handleSingleModel,
+    log,
+    comboName: "free",
+  });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls, ["model/a", "model/b"]);
+});
+
 test("tool-bearing fusion stops on non-retryable 400", async () => {
   const calls: string[] = [];
   const res = await handleFusionChat({
