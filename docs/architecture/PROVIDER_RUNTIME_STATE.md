@@ -2274,3 +2274,28 @@ not that anything was routed. `tests/unit/shadowControlPlaneAdapterR0.test.ts` s
 the full chain reaches a genuine `DESIRED` state once real observation evidence exists (using A2's
 own proven-READY `nvidia/moonshotai/kimi-k3` fixture), so the empty live result is a fact about
 today's available evidence, not a limitation of the pipeline itself.
+
+## Managed Combo Controlled Apply (O9-F3.5 A7.1 "R4.6")
+
+R4.6 closes the deliberate A7 gap between a read-only `ReconciliationPlan` and a real native
+OmniRoute Combo write. `src/lib/failover/managedComboApply.ts` consumes the existing desired state
+plus the existing reconciliation plan; it does not recompute policy, discover models, or invent a
+second routing representation. CREATE/UPDATE/DISABLE reuse `createCombo` / `updateCombo` only.
+Automatic deletion remains forbidden.
+
+The apply layer repeats ownership and fingerprint checks immediately before every mutation. A
+foreign Combo, operator drift, stale `beforeFingerprint`, logical-id mismatch, or name collision
+fails closed before a writer is called. Successful CREATE/UPDATE writes `config.jarvisManaged`
+with schema version, logical id, policy mode, last-applied fingerprint, and timestamp, then reads
+the Combo back and verifies the actual fingerprint and ownership metadata.
+
+Native Combo normalization persists model steps provider-qualified (for example
+`openrouter/cohere/north-mini-code:free`). R4.6 therefore also canonicalizes a stored model back to
+A7's member form before computing the read-back fingerprint. This prevents Jarvis's own first
+write from appearing as false operator drift on the next reconciliation. `isHidden` is now carried
+through the live Combo snapshot as well, so DISABLE is observable and idempotent instead of being
+lost at the adapter boundary.
+
+`PUT /api/jarvis-managed/free-coding` is the authenticated controlled apply surface. It first runs
+the same fresh R4.5 free-coding evaluation used by the dry-run path, then applies only the returned
+plan. `POST` remains observation-refresh + dry-run and `GET` remains local-state read-only.

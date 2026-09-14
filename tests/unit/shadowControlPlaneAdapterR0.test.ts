@@ -643,7 +643,8 @@ test("R4.5a: jarvisManaged audit metadata is excluded from the actual-state fing
     models: [
       {
         kind: "model",
-        model: member.model,
+        // Native Combo normalization persists provider-qualified model ids.
+        model: `${member.providerId}/${member.model}`,
         providerId: member.providerId,
         connectionId: member.connectionId,
       },

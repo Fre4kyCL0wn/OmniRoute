@@ -222,6 +222,7 @@ export interface ShadowComboSnapshot {
   strategy: string;
   models: unknown[];
   config: Record<string, unknown> | null;
+  isHidden?: boolean;
 }
 
 function mapRawCombo(raw: unknown): ShadowComboSnapshot | null {
@@ -238,6 +239,7 @@ function mapRawCombo(raw: unknown): ShadowComboSnapshot | null {
       r.config && typeof r.config === "object" && !Array.isArray(r.config)
         ? (r.config as Record<string, unknown>)
         : null,
+    isHidden: r.isHidden === true,
   };
 }
 
@@ -672,14 +674,20 @@ export function mapComboToCurrentComboState(combo: ShadowComboSnapshot): Current
     if (step.kind !== undefined && step.kind !== "model") continue;
     if (typeof step.model !== "string" || step.model.trim() === "") continue;
     if (typeof step.providerId !== "string" || step.providerId.trim() === "") continue;
+    const providerId = step.providerId.trim();
+    const rawModel = step.model.trim();
+    const providerPrefix = `${providerId}/`;
+    const model = rawModel.startsWith(providerPrefix)
+      ? rawModel.slice(providerPrefix.length)
+      : rawModel;
     members.push({
-      routeId: `${step.providerId}/${step.model}`,
-      providerId: step.providerId,
+      routeId: `${providerId}/${model}`,
+      providerId,
       connectionId:
         typeof step.connectionId === "string" && step.connectionId.trim() !== ""
           ? step.connectionId
           : UNSPECIFIED_CONNECTION_SENTINEL,
-      model: step.model,
+      model,
     });
   }
 
@@ -720,6 +728,7 @@ export function mapComboToCurrentComboState(combo: ShadowComboSnapshot): Current
     members,
     actualFingerprint,
     ownership,
+    isHidden: combo.isHidden,
   };
 }
 

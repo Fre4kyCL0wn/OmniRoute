@@ -5,7 +5,7 @@
  * observations participates. Optional refresh asks the native generic catalog
  * layer whether each provider is supported; no Jarvis provider allowlist exists.
  */
-import { getCombos } from "@/lib/db/combos";
+import { createCombo, getComboById, getComboByName, getCombos, updateCombo } from "@/lib/db/combos";
 import { getActivationApproval } from "@/lib/db/providerActivationApprovals";
 import { getProviderObservationInventory } from "@/lib/db/providerObservedModels";
 import { getRawProviderConnections } from "@/lib/db/providers";
@@ -26,6 +26,7 @@ import {
   type ShadowManagedComboArtifact,
 } from "./shadowControlPlaneAdapter";
 import type { ProviderObservationInventory } from "../providerOnboarding/types";
+import { applyManagedComboReconciliation, type ManagedComboApplyResult } from "./managedComboApply";
 import {
   observeConnectionBillingSafety,
   type ConnectionBillingObservation,
@@ -48,6 +49,11 @@ export interface ManagedFreeCodingDryRun {
 export interface ManagedFreeCodingControlPlaneOptions {
   refreshObservations?: boolean;
   nowMs?: number;
+}
+
+export interface ManagedFreeCodingApply {
+  dryRun: ManagedFreeCodingDryRun;
+  apply: ManagedComboApplyResult;
 }
 
 interface ConnectionRow {
@@ -104,6 +110,7 @@ function toComboSnapshot(raw: Record<string, unknown>): ShadowComboSnapshot | nu
       raw.config && typeof raw.config === "object" && !Array.isArray(raw.config)
         ? (raw.config as Record<string, unknown>)
         : null,
+    isHidden: raw.isHidden === true,
   };
 }
 
@@ -277,4 +284,21 @@ export async function buildManagedFreeCodingDryRun(
     discoveredProviderCount: providers.length,
     activeConnectionCount: connections.filter((c) => c.isActive).length,
   };
+}
+
+export async function applyManagedFreeCoding(
+  options: ManagedFreeCodingControlPlaneOptions = {}
+): Promise<ManagedFreeCodingApply> {
+  const nowMs = options.nowMs ?? Date.now();
+  const dryRun = await buildManagedFreeCodingDryRun({
+    ...options,
+    nowMs,
+  });
+  const apply = await applyManagedComboReconciliation({
+    desired: dryRun.artifact.desiredState,
+    plan: dryRun.artifact.reconciliationPlan,
+    nowIso: new Date(nowMs).toISOString(),
+    deps: { getComboByName, getComboById, createCombo, updateCombo },
+  });
+  return { dryRun, apply };
 }
