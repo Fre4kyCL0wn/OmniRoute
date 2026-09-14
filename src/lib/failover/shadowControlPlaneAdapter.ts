@@ -62,7 +62,7 @@ import {
 import type { ProviderObservationInventory } from "../providerOnboarding/types";
 import { candidateFromResolvedObservation } from "./failoverA3Adapter";
 import type { FailoverCandidate } from "./failoverDecision";
-import { buildSafeCandidateSet } from "./jarvisSafeCandidateSet";
+import { buildSafeCandidateSet, type CandidateDisposition } from "./jarvisSafeCandidateSet";
 import {
   recommendStrategy,
   type CandidateStrategy,
@@ -700,11 +700,17 @@ export function mapComboToCurrentComboState(combo: ShadowComboSnapshot): Current
       ? ((jarvisManagedRaw as Record<string, unknown>).policyMode as string)
       : "unknown";
 
+  // `jarvisManaged` is ownership/audit metadata, not desired Combo settings.
+  // Excluding it is essential: otherwise Jarvis's own ownership record changes
+  // the fingerprint it is meant to attest and every clean read-back looks drifted.
+  const fingerprintConfig: Record<string, unknown> = { ...(combo.config ?? {}) };
+  delete fingerprintConfig.jarvisManaged;
+
   const actualFingerprint = computeEvidenceFingerprint({
     members,
     strategy: combo.strategy,
     policyMode: persistedPolicyMode,
-    config: combo.config ?? {},
+    config: fingerprintConfig,
   });
 
   return {
@@ -730,11 +736,21 @@ export interface ShadowConnectionPipelineResult {
   candidatesBuilt: number;
 }
 
+export interface PipelineCandidateDiagnostic {
+  routeId: string;
+  providerId: string;
+  connectionId: string;
+  activationState: FailoverCandidate["activationState"];
+  strictZeroCostSafe: boolean;
+  disposition: CandidateDisposition;
+}
+
 export interface PipelineSummary {
   policyMode: ActivationPolicyMode;
   connections: readonly ShadowConnectionPipelineResult[];
   totalCandidates: number;
   safeCandidateCount: { general: number; strictZeroCost: number };
+  candidates: readonly PipelineCandidateDiagnostic[];
   strategy: CandidateStrategy | null;
   strategyConfidence: StrategyConfidence;
   strategyReasons: readonly StrategyReasonCode[];
@@ -764,8 +780,17 @@ export interface RunShadowManagedComboPipelineInput {
   now: number;
   /** Per-connection observation inventory; absent = honestly never observed (A2's own default). */
   observationInventoryByConnection?: ReadonlyMap<string, ProviderObservationInventory>;
-  resolveApproval?: (canonicalModelId: string) => ActivationApprovalRecord | null | undefined;
-  /** Per-connection runtime-state override (tests only); live callers get the conservative projection. */
+  resolveApproval?: (
+    canonicalModelId: string,
+    connectionId: string
+  ) => ActivationApprovalRecord | null | undefined;
+  /**
+   * Per-exact-route runtime state. Key format: `${connectionId}::${canonicalModelId}`.
+   * Preferred over the legacy per-connection map because quota/cooldown/lockout
+   * can be model-scoped on one connection.
+   */
+  runtimeStateByRoute?: ReadonlyMap<string, ProviderRuntimeState>;
+  /** Legacy/test fallback when no exact-route state was supplied. */
   runtimeStateByConnection?: ReadonlyMap<string, ProviderRuntimeState>;
   /**
    * Ground truth for "is this model already in the live synced/custom-models
@@ -815,16 +840,19 @@ export function runShadowManagedComboPipeline(
       resolved: resolution.models,
       connectionActive: connection.isActive,
       policyMode: input.policyMode,
-      resolveApproval: input.resolveApproval,
+      resolveApproval: (canonicalModelId) =>
+        input.resolveApproval?.(canonicalModelId, connection.connectionId),
     });
-
-    const runtimeState =
-      input.runtimeStateByConnection?.get(connection.connectionId) ??
-      conservativeRuntimeStateFromConnection(connection, input.now);
 
     let candidatesBuilt = 0;
     for (let i = 0; i < resolution.models.length; i++) {
       const resolved = resolution.models[i];
+      const runtimeState =
+        input.runtimeStateByRoute?.get(
+          `${connection.connectionId}::${resolved.record.canonicalModelId}`
+        ) ??
+        input.runtimeStateByConnection?.get(connection.connectionId) ??
+        conservativeRuntimeStateFromConnection(connection, input.now);
       // A model no longer listed by the last refresh is observation
       // history, not a live routing candidate — never built into a
       // FailoverCandidate.
@@ -858,6 +886,20 @@ export function runShadowManagedComboPipeline(
   }
 
   const safeSet = buildSafeCandidateSet(candidates, { now: input.now });
+  const candidateDiagnostics: PipelineCandidateDiagnostic[] = candidates.map((candidate) => {
+    const key = `${candidate.providerId}::${candidate.connectionId}::${candidate.routeId}`;
+    return {
+      routeId: candidate.routeId,
+      providerId: candidate.providerId,
+      connectionId: candidate.connectionId,
+      activationState: candidate.activationState,
+      strictZeroCostSafe: candidate.strictZeroCostSafe,
+      disposition: safeSet.dispositionByKey.get(key) ?? {
+        kind: "JARVIS_REJECTED",
+        reason: "NO_SAFE_ROUTE",
+      },
+    };
+  });
   const poolKind = input.policyMode === "strict_zero_cost" ? "strictZeroCost" : "general";
   const recommendation = recommendStrategy({
     safeSet,
@@ -894,6 +936,7 @@ export function runShadowManagedComboPipeline(
         general: safeSet.general.length,
         strictZeroCost: safeSet.strictZeroCost.length,
       },
+      candidates: candidateDiagnostics,
       strategy: recommendation.strategy,
       strategyConfidence: recommendation.confidence,
       strategyReasons: recommendation.reasons,

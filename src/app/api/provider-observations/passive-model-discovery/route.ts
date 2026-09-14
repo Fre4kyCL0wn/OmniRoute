@@ -40,7 +40,6 @@ import { getProviderOutboundGuard } from "@/shared/network/outboundUrlGuardPolic
 import { SAFE_OUTBOUND_FETCH_PRESETS, safeOutboundFetch } from "@/shared/network/safeOutboundFetch";
 
 import {
-  PASSIVE_DISCOVERY_SUPPORTED_PROVIDERS,
   runPassiveModelDiscovery,
   type PassiveDiscoveryConnectionInput,
 } from "./passiveModelDiscovery";
@@ -99,7 +98,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       const record = raw as { id?: unknown; provider?: unknown; isActive?: unknown };
       if (typeof record.id !== "string" || record.id.trim() === "") continue;
       if (typeof record.provider !== "string") continue;
-      if (!PASSIVE_DISCOVERY_SUPPORTED_PROVIDERS.has(record.provider)) continue;
       if (record.isActive !== true) continue;
       if (requestedIds && requestedIds.length > 0 && !requestedIds.includes(record.id)) continue;
       eligibleIds.add(record.id);

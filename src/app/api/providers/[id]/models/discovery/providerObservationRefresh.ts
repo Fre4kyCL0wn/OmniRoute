@@ -35,9 +35,6 @@ import {
 } from "./configuredCatalogFetch";
 import { PROVIDER_MODELS_CONFIG, type ProviderModelsConfigEntry } from "./providerModelsConfig";
 
-/** Providers whose observation uses the generic configured-catalog path. Opt-in per provider. */
-export const OBSERVATION_CATALOG_PROVIDERS: ReadonlySet<string> = new Set(["nvidia", "openrouter"]);
-
 export interface ObservationConnection {
   id: string;
   provider: string;
@@ -107,6 +104,15 @@ function catalogConfigFor(provider: string): ProviderModelsConfigEntry | null {
     : deriveConfigFromRegistryModelsUrl(provider);
 }
 
+/**
+ * Dynamic capability check for persisted observation refresh. Any provider
+ * with a native generic catalog description participates automatically; no
+ * Jarvis-specific provider list has to be edited when OmniRoute adds one.
+ */
+export function supportsObservationCatalogProvider(provider: string): boolean {
+  return catalogConfigFor(provider) !== null;
+}
+
 /** Refresh one connection's observation inventory and return its derived status. */
 export async function refreshConnectionObservations(
   connectionId: string,
@@ -116,7 +122,7 @@ export async function refreshConnectionObservations(
   const connection = await deps.loadConnection(connectionId);
   if (!connection) return { status: "no-connection" };
   const provider = connection.provider;
-  if (!OBSERVATION_CATALOG_PROVIDERS.has(provider)) {
+  if (!supportsObservationCatalogProvider(provider)) {
     return { status: "unsupported-provider", provider };
   }
   if (!connection.isActive) return { status: "inactive", provider };

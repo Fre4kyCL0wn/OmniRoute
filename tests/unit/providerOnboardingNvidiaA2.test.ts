@@ -28,8 +28,8 @@ import {
 } from "../../src/app/api/providers/[id]/models/discovery/configuredCatalogFetch.ts";
 import { PROVIDER_MODELS_CONFIG } from "../../src/app/api/providers/[id]/models/discovery/providerModelsConfig.ts";
 import {
-  OBSERVATION_CATALOG_PROVIDERS,
   refreshConnectionObservations,
+  supportsObservationCatalogProvider,
   type ConnectionObservationDeps,
   type ObservationConnection,
 } from "../../src/app/api/providers/[id]/models/discovery/providerObservationRefresh.ts";
@@ -677,10 +677,12 @@ test("N: connection A observations never leak into connection B", async () => {
   );
 });
 
-test("service: unsupported, inactive or keyless connections are not fetched", async () => {
-  assert.deepEqual([...OBSERVATION_CATALOG_PROVIDERS].sort(), ["nvidia", "openrouter"]);
+test("service: generic catalog support is dynamic; unsupported, inactive or keyless connections are not fetched", async () => {
+  assert.equal(supportsObservationCatalogProvider("groq"), true);
+  assert.equal(supportsObservationCatalogProvider("fireworks"), true);
+  assert.equal(supportsObservationCatalogProvider("codex"), false);
   for (const [c, status] of [
-    [conn("c1", "groq"), "unsupported-provider"],
+    [conn("c1", "codex"), "unsupported-provider"],
     [conn("c2", "nvidia", { isActive: false }), "inactive"],
     [conn("c3", "nvidia", { apiKey: null }), "no-credential"],
   ] as const) {

@@ -12,8 +12,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
-  PASSIVE_DISCOVERY_SUPPORTED_PROVIDERS,
   runPassiveModelDiscovery,
+  supportsPassiveDiscoveryProvider,
   type PassiveDiscoveryConnectionInput,
   type PassiveDiscoveryDeps,
 } from "../../src/app/api/provider-observations/passive-model-discovery/passiveModelDiscovery.ts";
@@ -89,6 +89,22 @@ test("A: a supported provider (openrouter) performs a real catalog request and r
   assert.deepEqual(deps.calls, ["openrouter"]);
 });
 
+test("A2: a newly configured provider is discoverable without a Jarvis allowlist change", async () => {
+  assert.equal(supportsPassiveDiscoveryProvider("fireworks"), true);
+  const conn = connection({ id: "c-fireworks", provider: "fireworks" });
+  const deps = depsFor([conn], {
+    fireworks: {
+      kind: "json",
+      status: 200,
+      body: { data: [{ id: "accounts/fireworks/models/example" }] },
+    },
+  });
+  const result = await runPassiveModelDiscovery(deps);
+  assert.equal(result.connections[0].status, "OK");
+  assert.equal(deps.calls.length, 1);
+  assert.equal(deps.calls[0], "fireworks");
+});
+
 // ---------------------------------------------------------------------------
 // B. unsupported provider fails closed
 // ---------------------------------------------------------------------------
@@ -100,7 +116,7 @@ test("B: an unsupported provider (codex) is UNSUPPORTED and never fetched", asyn
   assert.equal(result.connections[0].status, "UNSUPPORTED");
   assert.deepEqual(result.connections[0].models, []);
   assert.deepEqual(deps.calls, [], "codex must never reach the network layer");
-  assert.equal(PASSIVE_DISCOVERY_SUPPORTED_PROVIDERS.has("codex"), false);
+  assert.equal(supportsPassiveDiscoveryProvider("codex"), false);
 });
 
 // ---------------------------------------------------------------------------

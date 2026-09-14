@@ -49,21 +49,18 @@ import {
 import { FetchTimeoutError } from "@/shared/utils/fetchTimeout";
 
 /**
- * Providers this phase (R2) proves passive discovery against. Deliberately
- * NOT the same set as the persisting observation-refresh feature's own
- * allowlist (currently `nvidia`+`openrouter` only) — that allowlist gates a
- * different, persisting feature and changing its scope is out of R2's
- * mandate. `codex` is intentionally absent: it has its own discovery
- * mechanism and no entry in `PROVIDER_MODELS_CONFIG`; its already-persisted
- * inventory (R1) remains authoritative until a correct passive fetch path
- * exists for it — `UNSUPPORTED` is the honest answer.
+ * Dynamic capability check for the generic provider-catalog path.
+ *
+ * No Jarvis-owned provider allowlist lives here: any current or future
+ * OmniRoute provider automatically becomes discoverable when it exposes a
+ * native `PROVIDER_MODELS_CONFIG` entry or a registry `modelsUrl` that the
+ * existing configured-catalog client can consume. Providers with bespoke
+ * discovery protocols (for example Codex) remain honestly unsupported until
+ * their own adapter is represented by that native discovery surface.
  */
-export const PASSIVE_DISCOVERY_SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set([
-  "openrouter",
-  "groq",
-  "gemini",
-  "nvidia",
-]);
+export function supportsPassiveDiscoveryProvider(provider: string): boolean {
+  return catalogConfigFor(provider) !== null;
+}
 
 export type PassiveDiscoveryStatus =
   | "OK"
@@ -143,7 +140,7 @@ async function discoverOneConnection(
   const { id: connectionId, provider } = connection;
   const base = { providerId: provider, connectionId };
 
-  if (!PASSIVE_DISCOVERY_SUPPORTED_PROVIDERS.has(provider)) {
+  if (!supportsPassiveDiscoveryProvider(provider)) {
     return { ...base, status: "UNSUPPORTED", models: [] };
   }
   if (!connection.isActive) {

@@ -10,6 +10,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { ProviderRuntimeState } from "../../open-sse/services/providerRuntimeState.ts";
 
 import type {
   ProviderObservationInventory,
@@ -29,7 +30,11 @@ import {
   type ShadowComboSnapshot,
   type ShadowConnectionSnapshot,
 } from "../../src/lib/failover/shadowControlPlaneAdapter.ts";
-import { buildManagedComboLogicalId } from "../../src/lib/failover/managedComboDesiredState.ts";
+import {
+  buildManagedComboLogicalId,
+  computeEvidenceFingerprint,
+} from "../../src/lib/failover/managedComboDesiredState.ts";
+import { applyObservationRefresh } from "../../src/lib/providerOnboarding/catalog.ts";
 
 const NOW = 1_800_000_000_000;
 
@@ -611,4 +616,122 @@ test("V: connection isolation — a second connection's billing evidence never l
   const connB = artifact.pipelineSummary.connections.find((c) => c.connectionId === "conn-b");
   assert.equal(connA?.observationSummary.modelsObserved, 1);
   assert.equal(connB?.observationSummary.modelsObserved, 1);
+});
+
+// ---------------------------------------------------------------------------
+// R4.5a. Managed ownership read-back + per-route runtime precision
+// ---------------------------------------------------------------------------
+
+test("R4.5a: jarvisManaged audit metadata is excluded from the actual-state fingerprint", () => {
+  const logicalId = buildManagedComboLogicalId("free-coding-fingerprint");
+  const member = {
+    routeId: "gemini/gemini-3.1-flash-lite",
+    providerId: "gemini",
+    connectionId: "conn-gemini",
+    model: "gemini-3.1-flash-lite",
+  };
+  const fingerprint = computeEvidenceFingerprint({
+    members: [member],
+    strategy: "priority",
+    policyMode: "strict_zero_cost",
+    config: {},
+  });
+  const combo: ShadowComboSnapshot = {
+    id: "combo-managed-1",
+    name: "jarvis-managed/free-coding-fingerprint",
+    strategy: "priority",
+    models: [
+      {
+        kind: "model",
+        model: member.model,
+        providerId: member.providerId,
+        connectionId: member.connectionId,
+      },
+    ],
+    config: {
+      jarvisManaged: {
+        schemaVersion: 1,
+        logicalId,
+        policyMode: "strict_zero_cost",
+        lastAppliedFingerprint: fingerprint,
+        lastAppliedAt: "2026-09-14T08:00:00.000Z",
+      },
+    },
+  };
+  const current = mapComboToCurrentComboState(combo);
+  assert.equal(current.actualFingerprint, fingerprint);
+  assert.equal(current.ownership?.lastAppliedFingerprint, fingerprint);
+});
+
+test("R4.5a: exact-route runtime state rejects only the locked model on a shared connection", () => {
+  const connection: ShadowConnectionSnapshot = {
+    connectionId: "conn-nv-runtime",
+    provider: "nvidia",
+    authType: "apikey",
+    isActive: true,
+    testStatus: "active",
+    providerSpecificData: {},
+  };
+  const inventory = applyObservationRefresh(null, {
+    providerId: "nvidia",
+    connectionId: connection.connectionId,
+    source: "test-catalog",
+    observedAt: new Date(NOW).toISOString(),
+    outcome: {
+      ok: true,
+      items: [{ id: "moonshotai/kimi-k3" }, { id: "deepseek-ai/deepseek-v4-flash-0731" }],
+    },
+  });
+  const base = conservativeRuntimeStateFromConnection(connection, NOW);
+  const healthy = {
+    ...base,
+    providerHealth: "healthy" as const,
+    accountState: "available" as const,
+    quotaState: "available" as const,
+  };
+  const exhausted = {
+    ...healthy,
+    accountState: "quota_exhausted" as const,
+    quotaState: "quota_exhausted" as const,
+  };
+  const artifact = runShadowManagedComboPipeline({
+    connections: [connection],
+    combos: [],
+    purpose: "route-runtime-precision",
+    policyMode: "approved_ready",
+    requestClass: {
+      taskType: "coding",
+      requestHasTools: true,
+      estimatedContextTokens: null,
+      isBackgroundTask: false,
+      latencySensitive: null,
+    },
+    telemetry: {
+      headroomKnownCount: 0,
+      resetWindowKnownCount: 0,
+      equivalentLocalRouteCount: 0,
+      liveLoadTelemetryAvailable: false,
+      knownContextCapacityTokens: null,
+      cacheAffinityAvailable: false,
+    },
+    quota: { quotaPressure: true },
+    now: NOW,
+    observationInventoryByConnection: new Map([[connection.connectionId, inventory]]),
+    runtimeStateByRoute: new Map<string, ProviderRuntimeState>([
+      [`${connection.connectionId}::nvidia/moonshotai/kimi-k3`, exhausted],
+      [`${connection.connectionId}::nvidia/deepseek-ai/deepseek-v4-flash-0731`, healthy],
+    ]),
+    alreadyRoutableResolver: () => true,
+  });
+  assert.equal(artifact.pipelineSummary.totalCandidates, 2);
+  assert.equal(artifact.pipelineSummary.safeCandidateCount.general, 1);
+  const byRoute = new Map(artifact.pipelineSummary.candidates.map((c) => [c.routeId, c]));
+  assert.deepEqual(byRoute.get("nvidia/moonshotai/kimi-k3")?.disposition, {
+    kind: "JARVIS_REJECTED",
+    reason: "QUOTA_EXHAUSTED",
+  });
+  assert.equal(
+    byRoute.get("nvidia/deepseek-ai/deepseek-v4-flash-0731")?.disposition.kind,
+    "JARVIS_APPROVED"
+  );
 });
