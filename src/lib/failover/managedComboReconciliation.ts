@@ -185,6 +185,18 @@ export function planReconciliation(input: {
     });
   }
 
+  if (current.isHidden) {
+    return emptyPlan({
+      logicalId,
+      ownership,
+      comboId,
+      beforeFingerprint,
+      afterFingerprint,
+      action: "UPDATE_SETTINGS",
+      reasons: ["safe route recovered — re-enable managed combo"],
+    });
+  }
+
   if (beforeFingerprint === afterFingerprint) {
     return emptyPlan({
       logicalId,

@@ -5,6 +5,8 @@ import {
   getJarvisFreeCodingMaxActivations,
   getJarvisFreeCodingReconcileIntervalMs,
   isJarvisFreeCodingAutonomyEnabled,
+  isJarvisAutoSupervisorEnabled,
+  getJarvisAutoFallbackModel,
 } from "../../src/lib/jobs/jarvisManagedFreeCodingReconcileJobConfig.ts";
 
 test("R4.7 job is opt-in and therefore Production-safe by default", () => {
@@ -38,5 +40,14 @@ test("R4.7 activation fan-out setting is bounded", () => {
       OMNIROUTE_JARVIS_AUTONOMOUS_MAX_ACTIVATIONS_PER_RUN: "20",
     }),
     10
+  );
+});
+
+test("R4.8 supervisor config is separately opt-in and fallback is generic", () => {
+  assert.equal(isJarvisAutoSupervisorEnabled({}), false);
+  assert.equal(isJarvisAutoSupervisorEnabled({ OMNIROUTE_JARVIS_AUTO_SUPERVISOR: "true" }), true);
+  assert.equal(
+    getJarvisAutoFallbackModel({ OMNIROUTE_JARVIS_AUTO_FALLBACK_MODEL: "future-provider/code" }),
+    "future-provider/code"
   );
 });

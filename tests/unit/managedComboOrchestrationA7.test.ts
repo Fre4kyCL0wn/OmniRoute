@@ -323,6 +323,22 @@ test("G: current combo already matches desired state => NO_CHANGE", () => {
   assert.equal(plan.blocked, false);
 });
 
+test("G2: recovered safe route re-enables an otherwise matching hidden managed combo", () => {
+  const safeSet = buildSafeCandidateSet([mkCandidate("a/x", "a", "conn-a")]);
+  const desired = buildManagedComboDesiredState({
+    logicalId: LOGICAL_ID,
+    name: LOGICAL_ID,
+    safeSet,
+    recommendation: mkRecommendation("priority"),
+    policyMode: "manual",
+  });
+  const current = { ...currentFromDesired(desired, "combo-1", "priority"), isHidden: true };
+  const plan = planReconciliation({ desired, current });
+  assert.equal(plan.action, "UPDATE_SETTINGS");
+  assert.equal(plan.blocked, false);
+  assert.match(plan.reasons.join(" "), /re-enable/);
+});
+
 // ---------------------------------------------------------------------------
 // H. Member added => minimal membership diff
 // ---------------------------------------------------------------------------
