@@ -2299,3 +2299,32 @@ lost at the adapter boundary.
 `PUT /api/jarvis-managed/free-coding` is the authenticated controlled apply surface. It first runs
 the same fresh R4.5 free-coding evaluation used by the dry-run path, then applies only the returned
 plan. `POST` remains observation-refresh + dry-run and `GET` remains local-state read-only.
+
+## Autonomous Managed Reconciliation (O9-F3.5 A7.1 "R4.7")
+
+R4.7 turns the proven R4.5/R4.6 control plane into an opt-in runtime loop for
+`jarvis-managed/free-coding`. The loop is provider-agnostic: it enumerates the
+same active connections and generic observation catalogs as R4.5 and contains
+no provider allowlist. A provider added later therefore enters the exact same
+discovery, evidence, capability, quota and billing gates automatically.
+
+The scheduler is disabled unless
+`OMNIROUTE_JARVIS_AUTONOMOUS_RECONCILIATION=true`. The default interval is ten
+minutes, bounded to 1-60 minutes, and at most three pending models are
+auto-activated per run (bounded to 0-10). Production remains opt-out by
+default; Shadow explicitly enables the flag.
+
+Automatic activation is narrower than discovery. A candidate must already be
+A5-approved in the strict-zero-cost pool and remain `READY_BUT_NOT_ACTIVATED`.
+R4.7 then re-evaluates the exact connection/model through the existing
+activation orchestrator using the current observation and ephemeral billing
+evidence. An explicit operator revocation (`approved:false`) is never
+overridden. When no approval record exists, R4.7 supplies only an ephemeral
+auto-approval for that invocation; it does not persist a synthetic operator
+decision.
+
+After any activation, R4.7 refreshes and recomputes the entire desired state
+before R4.6 is allowed to write a Combo. The controlled apply layer therefore
+retains its existing ownership, drift, fingerprint, read-back and no-delete
+protections. A blocked or unverifiable apply is recorded as a failed job run
+instead of being retried as a different or weaker policy.

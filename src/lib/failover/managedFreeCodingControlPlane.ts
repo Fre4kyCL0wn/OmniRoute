@@ -286,6 +286,18 @@ export async function buildManagedFreeCodingDryRun(
   };
 }
 
+export async function applyManagedFreeCodingDryRun(
+  dryRun: ManagedFreeCodingDryRun,
+  nowMs: number = Date.now()
+): Promise<ManagedComboApplyResult> {
+  return applyManagedComboReconciliation({
+    desired: dryRun.artifact.desiredState,
+    plan: dryRun.artifact.reconciliationPlan,
+    nowIso: new Date(nowMs).toISOString(),
+    deps: { getComboByName, getComboById, createCombo, updateCombo },
+  });
+}
+
 export async function applyManagedFreeCoding(
   options: ManagedFreeCodingControlPlaneOptions = {}
 ): Promise<ManagedFreeCodingApply> {
@@ -294,11 +306,6 @@ export async function applyManagedFreeCoding(
     ...options,
     nowMs,
   });
-  const apply = await applyManagedComboReconciliation({
-    desired: dryRun.artifact.desiredState,
-    plan: dryRun.artifact.reconciliationPlan,
-    nowIso: new Date(nowMs).toISOString(),
-    deps: { getComboByName, getComboById, createCombo, updateCombo },
-  });
+  const apply = await applyManagedFreeCodingDryRun(dryRun, nowMs);
   return { dryRun, apply };
 }
