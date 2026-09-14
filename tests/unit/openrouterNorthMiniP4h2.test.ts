@@ -147,19 +147,27 @@ test("J: the static AutoCombo / quota-combo universe for OpenRouter is unchanged
   );
 });
 
-test("K: STRICT_ZERO_COST and the zero-cost route stay blocked", () => {
+test("K: model hard-stop is proven but zero-cost stays blocked without account safety", () => {
   const candidate = { provider: "openrouter", model: MODEL, connectionId: "shadow-openrouter" };
   const budget = findBudgetEntry(candidate);
-  assert.equal(budget?.hardStopGuaranteed, undefined);
+  assert.equal(budget?.hardStopGuaranteed, true);
   const safeQuota = () => ({
     status: "SAFE" as const,
     remainingFreeAllowance: 100,
     resetAt: null,
     checkedAt: new Date().toISOString(),
   });
-  assert.deepEqual(classifyStrictZeroCostCandidate(candidate, budget, safeQuota, {}), {
-    outcome: "no-hard-stop",
-  });
+  assert.deepEqual(
+    classifyStrictZeroCostCandidate(candidate, budget, safeQuota, {
+      minRemainingAllowance: 0,
+      maxStateAgeMs: 60_000,
+      now: Date.now,
+    }),
+    {
+      outcome: "safe",
+      safeConnectionIds: ["shadow-openrouter"],
+    }
+  );
 
   const c = caps("openrouter", MODEL);
   const safety = resolveConnectionZeroCostSafety({

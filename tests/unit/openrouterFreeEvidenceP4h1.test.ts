@@ -34,7 +34,7 @@ test("B: openrouter/cohere/north-mini-code:free resolves verifiedFree=true from 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].freeType, "recurring-daily");
   assert.equal(rows[0].poolKey, "openrouter-free");
-  assert.equal(rows[0].hardStopGuaranteed, undefined);
+  assert.equal(rows[0].hardStopGuaranteed, true);
   assert.equal(resolveVerifiedFree("openrouter", NORTH), true);
   assert.equal(
     produceCapabilities(extractProviderModelInfo("openrouter", NORTH)).verifiedFree,

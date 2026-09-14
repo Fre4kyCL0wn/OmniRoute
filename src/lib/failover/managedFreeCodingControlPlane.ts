@@ -14,6 +14,7 @@ import {
   SYNCED_AVAILABLE_MODELS_MALFORMED,
 } from "@/lib/db/models";
 import { getProviderRuntimeState } from "@omniroute/open-sse/services/providerRuntimeState.ts";
+import { parseConnectionBillingEvidence } from "@omniroute/open-sse/services/autoCombo/connectionBilling.ts";
 import {
   refreshConnectionObservations,
   supportsObservationCatalogProvider,
@@ -25,6 +26,10 @@ import {
   type ShadowManagedComboArtifact,
 } from "./shadowControlPlaneAdapter";
 import type { ProviderObservationInventory } from "../providerOnboarding/types";
+import {
+  observeConnectionBillingSafety,
+  type ConnectionBillingObservation,
+} from "./connectionBillingObservation";
 
 export interface ManagedFreeCodingRefreshResult {
   providerId: string;
@@ -35,6 +40,7 @@ export interface ManagedFreeCodingRefreshResult {
 export interface ManagedFreeCodingDryRun {
   artifact: ShadowManagedComboArtifact;
   observationRefresh: ManagedFreeCodingRefreshResult[];
+  billingObservation: ConnectionBillingObservation[];
   discoveredProviderCount: number;
   activeConnectionCount: number;
 }
@@ -51,6 +57,28 @@ interface ConnectionRow {
   isActive?: unknown;
   testStatus?: unknown;
   providerSpecificData?: unknown;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function applyBillingObservation(
+  connection: ShadowConnectionSnapshot,
+  observation: ConnectionBillingObservation | undefined
+): ShadowConnectionSnapshot {
+  if (!observation?.evidence) return connection;
+  const providerSpecificData = asRecord(connection.providerSpecificData);
+  const existing = parseConnectionBillingEvidence(providerSpecificData);
+  if (existing?.billingLinked === true && observation.evidence.billingLinked === false) {
+    return connection;
+  }
+  return {
+    ...connection,
+    providerSpecificData: { ...providerSpecificData, billingEvidence: observation.evidence },
+  };
 }
 
 function toConnectionSnapshot(row: ConnectionRow): ShadowConnectionSnapshot | null {
@@ -97,7 +125,7 @@ async function refreshEligibleConnections(
         results[index] = {
           providerId: connection.provider,
           connectionId: connection.connectionId,
-          status: result.status,
+          status: result.status === "refreshed" ? result.inventory.refreshStatus : result.status,
         };
       } catch {
         results[index] = {
@@ -128,9 +156,22 @@ export async function buildManagedFreeCodingDryRun(
     .map(toConnectionSnapshot)
     .filter((value): value is ShadowConnectionSnapshot => value !== null);
 
-  const observationRefresh = options.refreshObservations
-    ? await refreshEligibleConnections(connections)
-    : [];
+  const [observationRefresh, billingObservation] = options.refreshObservations
+    ? await Promise.all([
+        refreshEligibleConnections(connections),
+        Promise.all(
+          connections
+            .filter((connection) => connection.isActive)
+            .map((connection) => observeConnectionBillingSafety(connection))
+        ),
+      ])
+    : [[], []];
+  const billingByConnection = new Map(
+    billingObservation.map((observation) => [observation.connectionId, observation])
+  );
+  const pipelineConnections = connections.map((connection) =>
+    applyBillingObservation(connection, billingByConnection.get(connection.connectionId))
+  );
 
   const observationInventoryByConnection = new Map<string, ProviderObservationInventory>();
   for (const connection of connections) {
@@ -187,9 +228,11 @@ export async function buildManagedFreeCodingDryRun(
     (state) => state.quotaResetAt !== null
   ).length;
 
-  const providerByConnection = new Map(connections.map((c) => [c.connectionId, c.provider]));
+  const providerByConnection = new Map(
+    pipelineConnections.map((c) => [c.connectionId, c.provider])
+  );
   const artifact = runShadowManagedComboPipeline({
-    connections,
+    connections: pipelineConnections,
     combos,
     purpose: "free-coding",
     policyMode: "strict_zero_cost",
@@ -230,6 +273,7 @@ export async function buildManagedFreeCodingDryRun(
   return {
     artifact,
     observationRefresh,
+    billingObservation,
     discoveredProviderCount: providers.length,
     activeConnectionCount: connections.filter((c) => c.isActive).length,
   };
