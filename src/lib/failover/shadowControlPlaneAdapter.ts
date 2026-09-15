@@ -64,7 +64,11 @@ import {
   compatibilityEvidenceFresh,
   type ProviderModelCompatibilityInventory,
 } from "../providerOnboarding/compatibility";
-import { isZeroCostSafeForCompatibilityProbe } from "../providerOnboarding/evidence";
+import {
+  compatibilityProbePriority,
+  isToolRoundTripProbePlausible,
+  isZeroCostSafeForCompatibilityProbe,
+} from "../providerOnboarding/evidence";
 import { candidateFromResolvedObservation } from "./failoverA3Adapter";
 import type { FailoverCandidate } from "./failoverDecision";
 import { buildSafeCandidateSet, type CandidateDisposition } from "./jarvisSafeCandidateSet";
@@ -758,6 +762,8 @@ export interface PipelineCandidateDiagnostic {
   strictZeroCostSafe: boolean;
   /** True when this route may safely spend probe traffic and has no fresh compatibility evidence. */
   compatibilityProbeEligible?: boolean;
+  /** Provider-neutral metadata score used only to order bounded compatibility probes. */
+  compatibilityProbePriority?: number;
   /** Any PASS/INCOMPATIBLE/TRANSIENT result suppresses re-probing until its TTL expires. */
   compatibilityEvidenceFresh?: boolean;
   disposition: CandidateDisposition;
@@ -839,7 +845,7 @@ export function runShadowManagedComboPipeline(
   const candidates: FailoverCandidate[] = [];
   const compatibilityProbeByCandidateKey = new Map<
     string,
-    { eligible: boolean; evidenceFresh: boolean }
+    { eligible: boolean; evidenceFresh: boolean; priority: number }
   >();
 
   for (const connection of input.connections) {
@@ -898,7 +904,8 @@ export function runShadowManagedComboPipeline(
         resolved.evidence.claudeCodeEligible === null &&
         resolved.evidence.knownProtocolConflict !== true &&
         !evidenceFresh &&
-        isZeroCostSafeForCompatibilityProbe(resolved.evidence);
+        isZeroCostSafeForCompatibilityProbe(resolved.evidence) &&
+        isToolRoundTripProbePlausible(resolved.record, resolved.evidence);
       const candidate = candidateFromResolvedObservation({
         providerId: connection.provider,
         connectionId: connection.connectionId,
@@ -911,7 +918,11 @@ export function runShadowManagedComboPipeline(
       candidates.push(candidate);
       compatibilityProbeByCandidateKey.set(
         `${candidate.providerId}::${candidate.connectionId}::${candidate.routeId}`,
-        { eligible: compatibilityProbeEligible, evidenceFresh }
+        {
+          eligible: compatibilityProbeEligible,
+          evidenceFresh,
+          priority: compatibilityProbePriority(resolved.record),
+        }
       );
       candidatesBuilt++;
     }
@@ -937,6 +948,7 @@ export function runShadowManagedComboPipeline(
       activationState: candidate.activationState,
       strictZeroCostSafe: candidate.strictZeroCostSafe,
       compatibilityProbeEligible: probe?.eligible ?? false,
+      compatibilityProbePriority: probe?.priority ?? 0,
       compatibilityEvidenceFresh: probe?.evidenceFresh ?? false,
       disposition: safeSet.dispositionByKey.get(key) ?? {
         kind: "JARVIS_REJECTED",

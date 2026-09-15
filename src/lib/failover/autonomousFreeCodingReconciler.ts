@@ -24,6 +24,7 @@ import {
 import type { ConnectionBillingObservation } from "./connectionBillingObservation";
 import {
   runAutonomousFreeCodingReconciliationCore,
+  selectCompatibilityProbeTargets,
   type AutonomousActivationTarget,
   type AutonomousCompatibilityProbeAttempt,
   type AutonomousFreeCodingOptions,
@@ -106,14 +107,7 @@ async function probeCompatibilityCandidates(
   limit: number
 ): Promise<AutonomousCompatibilityProbeAttempt[]> {
   if (limit <= 0) return [];
-  const targets = dryRun.artifact.pipelineSummary.candidates
-    .filter((candidate) => candidate.compatibilityProbeEligible === true)
-    .sort((a, b) =>
-      `${a.providerId}::${a.connectionId}::${a.routeId}`.localeCompare(
-        `${b.providerId}::${b.connectionId}::${b.routeId}`
-      )
-    )
-    .slice(0, limit);
+  const targets = selectCompatibilityProbeTargets(dryRun, limit);
   const attempts: AutonomousCompatibilityProbeAttempt[] = [];
   for (const target of targets) {
     const prefix = `${target.providerId}/`;

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   R47_AUTONOMOUS_APPROVER,
   runAutonomousFreeCodingReconciliationCore,
+  selectCompatibilityProbeTargets,
   type AutonomousFreeCodingDeps,
 } from "../../src/lib/failover/autonomousFreeCodingReconcilerCore.ts";
 import type { ManagedFreeCodingDryRun } from "../../src/lib/failover/managedFreeCodingControlPlane.ts";
@@ -190,4 +191,25 @@ test("R4.9 F: compatibility PASS is re-resolved before activation in the same cy
   assert.equal(result.compatibilityProbes[0]?.state, "PASS");
   assert.deepEqual(fake.activated, ["dynamic/new-free-model"]);
   assert.equal(fake.buildCalls(), 3);
+});
+
+test("R4.9 G: compatibility probes prefer metadata priority over alphabetic order", () => {
+  const low: PipelineCandidateDiagnostic = {
+    ...pending("a-provider", "conn-a", "a-provider/general"),
+    activationState: "BLOCKED",
+    strictZeroCostSafe: false,
+    compatibilityProbeEligible: true,
+    compatibilityProbePriority: 10,
+    disposition: { kind: "JARVIS_REJECTED", reason: "NO_SAFE_ROUTE" },
+  };
+  const high: PipelineCandidateDiagnostic = {
+    ...pending("z-provider", "conn-z", "z-provider/code-model"),
+    activationState: "BLOCKED",
+    strictZeroCostSafe: false,
+    compatibilityProbeEligible: true,
+    compatibilityProbePriority: 80,
+    disposition: { kind: "JARVIS_REJECTED", reason: "NO_SAFE_ROUTE" },
+  };
+  const selected = selectCompatibilityProbeTargets(dryRun([low, high]), 1);
+  assert.equal(selected[0]?.routeId, "z-provider/code-model");
 });

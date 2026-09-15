@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { evaluateZeroCostRoute } from "../../open-sse/services/autoCombo/zeroCostRouteEligibility.ts";
-import { resolveObservedModelEvidence } from "../../src/lib/providerOnboarding/evidence.ts";
+import {
+  isToolRoundTripProbePlausible,
+  resolveObservedModelEvidence,
+} from "../../src/lib/providerOnboarding/evidence.ts";
 import type { ProviderObservationRecord } from "../../src/lib/providerOnboarding/types.ts";
 
 const NOW = "2026-09-15T20:00:00.000Z";
@@ -125,4 +128,26 @@ test("F3.3D: exact zero price is an independent cost proof, not a fake hard-stop
     }),
     { eligible: false, reason: "no-hard-stop" }
   );
+});
+
+test("F3.3D: explicit supported-parameter metadata can rule out a Claude tool probe", () => {
+  const noTools = record({ supportedParameters: ["max_tokens", "temperature"] });
+  const evidence = resolveObservedModelEvidence(
+    noTools.providerModelId,
+    safeConnection,
+    true,
+    noTools
+  );
+  assert.equal(isToolRoundTripProbePlausible(noTools, evidence), false);
+});
+
+test("F3.3D: missing supported-parameter metadata does not falsely rule out a probe", () => {
+  const unknown = record({ supportedParameters: null });
+  const evidence = resolveObservedModelEvidence(
+    unknown.providerModelId,
+    safeConnection,
+    true,
+    unknown
+  );
+  assert.equal(isToolRoundTripProbePlausible(unknown, evidence), true);
 });

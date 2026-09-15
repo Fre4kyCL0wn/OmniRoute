@@ -96,6 +96,31 @@ function observedToolCalling(record: ProviderObservationRecord | null | undefine
  * or the curated recurring-free model has both a hard stop and a connection
  * that cannot spill into paid overage.
  */
+export function isToolRoundTripProbePlausible(
+  record: ProviderObservationRecord,
+  evidence: ObservedModelEvidence
+): boolean {
+  if (evidence.toolCalling === false) return false;
+  if (record.supportedParameters === null) return true;
+  const params = record.supportedParameters.map((value) => value.toLowerCase());
+  return params.includes("tools") || params.includes("tool_choice");
+}
+
+export function compatibilityProbePriority(record: ProviderObservationRecord): number {
+  const id = record.providerModelId.toLowerCase();
+  const params = new Set((record.supportedParameters ?? []).map((value) => value.toLowerCase()));
+  let score = 0;
+  if (/(^|[\/_.:-])(code|coder|coding)([\/_.:-]|$)/.test(id)) score += 40;
+  if (id.includes("devstral") || id.includes("software") || id.includes("programmer")) score += 25;
+  if (params.has("tools")) score += 20;
+  if (params.has("tool_choice")) score += 5;
+  if (params.has("reasoning") || params.has("reasoning_effort")) score += 5;
+  const context = record.contextWindow ?? 0;
+  if (context >= 128_000) score += 10;
+  else if (context >= 32_000) score += 5;
+  return score;
+}
+
 export function isZeroCostSafeForCompatibilityProbe(evidence: ObservedModelEvidence): boolean {
   if (evidence.catalogZeroPrice === true) return true;
   return (

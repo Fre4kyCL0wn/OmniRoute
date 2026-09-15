@@ -85,6 +85,27 @@ function strictPendingTargets(dryRun: ManagedFreeCodingDryRun): AutonomousActiva
     );
 }
 
+export function selectCompatibilityProbeTargets(
+  dryRun: ManagedFreeCodingDryRun,
+  limit: number
+): AutonomousActivationTarget[] {
+  return dryRun.artifact.pipelineSummary.candidates
+    .filter((candidate) => candidate.compatibilityProbeEligible === true)
+    .sort((a, b) => {
+      const priority = (b.compatibilityProbePriority ?? 0) - (a.compatibilityProbePriority ?? 0);
+      if (priority !== 0) return priority;
+      return `${a.providerId}::${a.connectionId}::${a.routeId}`.localeCompare(
+        `${b.providerId}::${b.connectionId}::${b.routeId}`
+      );
+    })
+    .slice(0, Math.max(0, limit))
+    .map((candidate) => ({
+      routeId: candidate.routeId,
+      providerId: candidate.providerId,
+      connectionId: candidate.connectionId,
+    }));
+}
+
 function boundedActivationLimit(value: number | undefined): number {
   if (!Number.isFinite(value)) return R47_DEFAULT_MAX_ACTIVATIONS_PER_RUN;
   return Math.max(0, Math.min(10, Math.trunc(value ?? 0)));
