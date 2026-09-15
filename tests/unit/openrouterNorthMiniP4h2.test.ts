@@ -186,6 +186,7 @@ test("K: model hard-stop is proven but zero-cost stays blocked without account s
       quotaExhausted: false,
       localZeroCost: false,
       verifiedFree: c.verifiedFree,
+      exactZeroPrice: null,
       hardStopGuaranteed: budget?.hardStopGuaranteed ?? null,
       connectionSafeForZeroCost: safety.safe,
     }),

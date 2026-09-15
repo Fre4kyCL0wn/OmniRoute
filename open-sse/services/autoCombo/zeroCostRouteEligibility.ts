@@ -33,9 +33,15 @@ export interface ZeroCostRouteFacts {
   quotaExhausted: boolean | null;
   /** Genuine self-hosted route (`isSelfHostedChatProvider`): no external provider bill exists. */
   localZeroCost: boolean | null;
-  /** MODEL layer. */
+  /** MODEL layer: recurring-free proof from curated or live provider-catalog evidence. */
   verifiedFree: boolean | null;
-  /** MODEL layer: `FreeModelBudget.hardStopGuaranteed` for this exact catalog entry. */
+  /**
+   * Exact current provider-catalog price evidence. true means both input and
+   * output prices were explicitly observed as zero for this exact model.
+   * null means the provider did not expose enough pricing evidence.
+   */
+  exactZeroPrice: boolean | null;
+  /** MODEL layer: `FreeModelBudget.hardStopGuaranteed` for this exact curated catalog entry. */
   hardStopGuaranteed: boolean | null;
   /** CONNECTION layer. */
   connectionSafeForZeroCost: boolean | null;
@@ -76,7 +82,11 @@ function externalCostRejection(facts: ZeroCostRouteFacts): ZeroCostRouteReason |
   if (facts.verifiedFree !== true) return "model-free-unknown";
   if (facts.connectionSafeForZeroCost === false) return "connection-unsafe";
   if (facts.connectionSafeForZeroCost !== true) return "connection-safety-unknown";
-  if (facts.hardStopGuaranteed !== true) return "no-hard-stop";
+  // Two independent strong economic proofs are accepted:
+  //  1. curated terms guarantee a hard stop when the free allowance ends; or
+  //  2. the live provider catalog explicitly prices both input and output at 0.
+  // Missing/partial pricing does not weaken the existing hard-stop requirement.
+  if (facts.hardStopGuaranteed !== true && facts.exactZeroPrice !== true) return "no-hard-stop";
   return null;
 }
 

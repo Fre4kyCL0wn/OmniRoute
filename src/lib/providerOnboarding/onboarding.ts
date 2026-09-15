@@ -86,7 +86,8 @@ export function resolveProviderObservations(input: {
     const evidence = resolveObservedModelEvidence(
       record.providerModelId,
       connection,
-      connection.isActive
+      connection.isActive,
+      record
     );
     const isHidden = hidden.has(record.providerModelId);
     return {

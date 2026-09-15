@@ -19,6 +19,7 @@ import {
 import { findBudgetEntry } from "@omniroute/open-sse/services/autoCombo/strictZeroCostFilter.ts";
 import { evaluateZeroCostRoute } from "@omniroute/open-sse/services/autoCombo/zeroCostRouteEligibility.ts";
 import { produceCapabilities } from "@omniroute/open-sse/services/capabilityEligibility.ts";
+import type { ProviderObservationRecord } from "./types";
 
 export type UsageCostClass =
   "verified_free" | "free_tier" | "subscription_included" | "paid" | "unknown";
@@ -30,6 +31,10 @@ export interface ObservedModelEvidence {
   claudeCodeEligible: boolean | null;
   supervisorEligible: boolean | null;
   verifiedFree: boolean | null;
+  /** Exact live provider-catalog pricing evidence. true only when both input and output are explicitly zero. */
+  catalogZeroPrice: boolean | null;
+  /** Whether verifiedFree came from the curated catalog, live catalog pricing, or remains unknown. */
+  freeEvidenceSource: "curated-free-catalog" | "provider-catalog-zero-price" | null;
   freeType: FreeModelFreeType | null;
   hardStopGuaranteed: boolean | null;
   usageCostClass: UsageCostClass;
@@ -47,8 +52,13 @@ export interface ObservedModelEvidence {
  */
 function usageCostClassFor(
   connection: BillableConnection,
-  freeType: FreeModelFreeType | null
+  freeType: FreeModelFreeType | null,
+  catalogZeroPrice: boolean | null
 ): UsageCostClass {
+  // Exact provider-catalog zero pricing is stronger than account-plan inference:
+  // the observed route itself currently has no per-token charge. Unknown/missing
+  // pricing never enters this branch.
+  if (catalogZeroPrice === true) return "verified_free";
   const verdict = classifyConnectionBilling(connection);
   switch (verdict.billing) {
     case "keyless":
@@ -62,16 +72,45 @@ function usageCostClassFor(
   }
 }
 
+function catalogZeroPriceFor(record: ProviderObservationRecord | null | undefined): boolean | null {
+  if (!record?.currentlyObserved) return null;
+  const input = record.pricingInput;
+  const output = record.pricingOutput;
+  if (typeof input !== "number" || typeof output !== "number") return null;
+  if (!Number.isFinite(input) || !Number.isFinite(output)) return null;
+  return input === 0 && output === 0;
+}
+
+function observedToolCalling(record: ProviderObservationRecord | null | undefined): boolean | null {
+  if (!record?.currentlyObserved) return null;
+  if (record.toolCallingObserved !== null) return record.toolCallingObserved;
+  const params = record.supportedParameters?.map((value) => value.toLowerCase()) ?? [];
+  return params.includes("tools") || params.includes("tool_choice") ? true : null;
+}
+
 export function resolveObservedModelEvidence(
   providerModelId: string,
   connection: BillableConnection,
-  connectionActive: boolean
+  connectionActive: boolean,
+  record?: ProviderObservationRecord | null
 ): ObservedModelEvidence {
   const providerId = connection.provider;
-  const info = extractProviderModelInfo(providerId, providerModelId);
+  const info = extractProviderModelInfo(providerId, providerModelId, {
+    toolCalling: observedToolCalling(record),
+    contextLength: record?.currentlyObserved ? record.contextWindow : null,
+    maxOutputTokens: record?.currentlyObserved ? record.maxOutput : null,
+  });
   const caps = produceCapabilities(info);
   const budget = findBudgetEntry({ provider: providerId, model: providerModelId });
   const freeType = budget?.freeType ?? null;
+  const catalogZeroPrice = catalogZeroPriceFor(record);
+  const verifiedFree = caps.verifiedFree ?? catalogZeroPrice;
+  const freeEvidenceSource =
+    caps.verifiedFree !== null
+      ? "curated-free-catalog"
+      : catalogZeroPrice === true
+        ? "provider-catalog-zero-price"
+        : null;
   const hardStopGuaranteed = budget?.hardStopGuaranteed ?? null;
   const safety = resolveConnectionZeroCostSafety(connection);
   const route = evaluateZeroCostRoute({
@@ -81,7 +120,8 @@ export function resolveObservedModelEvidence(
     unhealthy: null,
     quotaExhausted: null,
     localZeroCost: false,
-    verifiedFree: caps.verifiedFree,
+    verifiedFree,
+    exactZeroPrice: catalogZeroPrice,
     hardStopGuaranteed,
     connectionSafeForZeroCost: safety.safe,
   });
@@ -94,10 +134,12 @@ export function resolveObservedModelEvidence(
     toolCalling: info.toolCalling,
     claudeCodeEligible: caps.claudeCodeEligible,
     supervisorEligible: caps.supervisorEligible,
-    verifiedFree: caps.verifiedFree,
+    verifiedFree,
+    catalogZeroPrice,
+    freeEvidenceSource,
     freeType,
     hardStopGuaranteed,
-    usageCostClass: usageCostClassFor(connection, freeType),
+    usageCostClass: usageCostClassFor(connection, freeType, catalogZeroPrice),
     connectionSafeForZeroCost: safety.safe,
     knownProtocolConflict: caps.claudeCodeEligible === false,
     strictZeroCostEligible: route.eligible,
