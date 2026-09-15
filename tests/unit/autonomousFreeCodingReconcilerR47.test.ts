@@ -152,3 +152,42 @@ test("R4.7 E: without activation, the exact initial dry-run is applied", async (
   assert.equal(applied, initial);
   assert.equal(fake.buildCalls(), 1);
 });
+
+test("R4.9 F: compatibility PASS is re-resolved before activation in the same cycle", async () => {
+  const awaitingProbe: PipelineCandidateDiagnostic = {
+    routeId: "dynamic/new-free-model",
+    providerId: "dynamic",
+    connectionId: "conn-dynamic",
+    activationState: "BLOCKED",
+    strictZeroCostSafe: false,
+    compatibilityProbeEligible: true,
+    compatibilityEvidenceFresh: false,
+    disposition: { kind: "JARVIS_REJECTED", reason: "NO_SAFE_ROUTE" },
+  };
+  const afterProbe = pending("dynamic", "conn-dynamic", "dynamic/new-free-model");
+  const initial = dryRun([awaitingProbe]);
+  const ready = dryRun([afterProbe]);
+  const final = dryRun([]);
+  const fake = depsFor({ runs: [initial, ready, final] });
+  let probeLimit = -1;
+  fake.deps.probeCompatibilityCandidates = async (_dryRun, _nowMs, limit) => {
+    probeLimit = limit;
+    return [
+      {
+        routeId: awaitingProbe.routeId,
+        providerId: awaitingProbe.providerId,
+        connectionId: awaitingProbe.connectionId,
+        state: "PASS",
+        failureClass: null,
+        latencyMs: 123,
+      },
+    ];
+  };
+
+  const result = await runAutonomousFreeCodingReconciliationCore({ nowMs: NOW }, fake.deps);
+
+  assert.equal(probeLimit, 2);
+  assert.equal(result.compatibilityProbes[0]?.state, "PASS");
+  assert.deepEqual(fake.activated, ["dynamic/new-free-model"]);
+  assert.equal(fake.buildCalls(), 3);
+});

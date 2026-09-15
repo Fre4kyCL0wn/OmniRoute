@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   getJarvisFreeCodingMaxActivations,
+  getJarvisFreeCodingMaxCompatibilityProbes,
   getJarvisFreeCodingReconcileIntervalMs,
   isJarvisFreeCodingAutonomyEnabled,
   isJarvisAutoSupervisorEnabled,
@@ -40,6 +41,22 @@ test("R4.7 activation fan-out setting is bounded", () => {
       OMNIROUTE_JARVIS_AUTONOMOUS_MAX_ACTIVATIONS_PER_RUN: "20",
     }),
     10
+  );
+});
+
+test("R4.9 compatibility probe fan-out is conservative and bounded", () => {
+  assert.equal(getJarvisFreeCodingMaxCompatibilityProbes({}), 2);
+  assert.equal(
+    getJarvisFreeCodingMaxCompatibilityProbes({
+      OMNIROUTE_JARVIS_AUTONOMOUS_MAX_COMPATIBILITY_PROBES_PER_RUN: "99",
+    }),
+    5
+  );
+  assert.equal(
+    getJarvisFreeCodingMaxCompatibilityProbes({
+      OMNIROUTE_JARVIS_AUTONOMOUS_MAX_COMPATIBILITY_PROBES_PER_RUN: "-4",
+    }),
+    0
   );
 });
 

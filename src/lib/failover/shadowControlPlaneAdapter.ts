@@ -60,6 +60,11 @@ import {
   type ProviderObservationSummary,
 } from "../providerOnboarding/onboarding";
 import type { ProviderObservationInventory } from "../providerOnboarding/types";
+import {
+  compatibilityEvidenceFresh,
+  type ProviderModelCompatibilityInventory,
+} from "../providerOnboarding/compatibility";
+import { isZeroCostSafeForCompatibilityProbe } from "../providerOnboarding/evidence";
 import { candidateFromResolvedObservation } from "./failoverA3Adapter";
 import type { FailoverCandidate } from "./failoverDecision";
 import { buildSafeCandidateSet, type CandidateDisposition } from "./jarvisSafeCandidateSet";
@@ -751,6 +756,10 @@ export interface PipelineCandidateDiagnostic {
   connectionId: string;
   activationState: FailoverCandidate["activationState"];
   strictZeroCostSafe: boolean;
+  /** True when this route may safely spend probe traffic and has no fresh compatibility evidence. */
+  compatibilityProbeEligible?: boolean;
+  /** Any PASS/INCOMPATIBLE/TRANSIENT result suppresses re-probing until its TTL expires. */
+  compatibilityEvidenceFresh?: boolean;
   disposition: CandidateDisposition;
 }
 
@@ -789,6 +798,7 @@ export interface RunShadowManagedComboPipelineInput {
   now: number;
   /** Per-connection observation inventory; absent = honestly never observed (A2's own default). */
   observationInventoryByConnection?: ReadonlyMap<string, ProviderObservationInventory>;
+  compatibilityInventoryByConnection?: ReadonlyMap<string, ProviderModelCompatibilityInventory>;
   resolveApproval?: (
     canonicalModelId: string,
     connectionId: string
@@ -827,6 +837,10 @@ export function runShadowManagedComboPipeline(
 
   const connectionResults: ShadowConnectionPipelineResult[] = [];
   const candidates: FailoverCandidate[] = [];
+  const compatibilityProbeByCandidateKey = new Map<
+    string,
+    { eligible: boolean; evidenceFresh: boolean }
+  >();
 
   for (const connection of input.connections) {
     const billable: BillableConnection & { isActive: boolean } = {
@@ -841,7 +855,14 @@ export function runShadowManagedComboPipeline(
       input.observationInventoryByConnection?.get(connection.connectionId) ??
       emptyInventory(connection.provider, connection.connectionId, "shadow-control-plane-adapter");
 
-    const resolution = resolveProviderObservations({ inventory, connection: billable });
+    const resolution = resolveProviderObservations({
+      inventory,
+      connection: billable,
+      compatibilityInventory: input.compatibilityInventoryByConnection?.get(
+        connection.connectionId
+      ),
+      nowMs: input.now,
+    });
 
     const gate = resolveActivationGate({
       provider: connection.provider,
@@ -867,19 +888,30 @@ export function runShadowManagedComboPipeline(
       // FailoverCandidate.
       if (!resolved.record.currentlyObserved) continue;
       const activation = gate.decisions[i];
-      candidates.push(
-        candidateFromResolvedObservation({
-          providerId: connection.provider,
-          connectionId: connection.connectionId,
-          resolved,
-          runtimeState,
-          activation,
-          connectionActive: connection.isActive,
-          alreadyRoutable: alreadyRoutable(
-            resolved.record.canonicalModelId,
-            connection.connectionId
-          ),
-        })
+      const compatibilityEvidence = input.compatibilityInventoryByConnection?.get(
+        connection.connectionId
+      )?.models?.[resolved.record.providerModelId];
+      const evidenceFresh = compatibilityEvidenceFresh(compatibilityEvidence, input.now);
+      const compatibilityProbeEligible =
+        connection.isActive === true &&
+        resolved.record.currentlyObserved === true &&
+        resolved.evidence.claudeCodeEligible === null &&
+        resolved.evidence.knownProtocolConflict !== true &&
+        !evidenceFresh &&
+        isZeroCostSafeForCompatibilityProbe(resolved.evidence);
+      const candidate = candidateFromResolvedObservation({
+        providerId: connection.provider,
+        connectionId: connection.connectionId,
+        resolved,
+        runtimeState,
+        activation,
+        connectionActive: connection.isActive,
+        alreadyRoutable: alreadyRoutable(resolved.record.canonicalModelId, connection.connectionId),
+      });
+      candidates.push(candidate);
+      compatibilityProbeByCandidateKey.set(
+        `${candidate.providerId}::${candidate.connectionId}::${candidate.routeId}`,
+        { eligible: compatibilityProbeEligible, evidenceFresh }
       );
       candidatesBuilt++;
     }
@@ -897,12 +929,15 @@ export function runShadowManagedComboPipeline(
   const safeSet = buildSafeCandidateSet(candidates, { now: input.now });
   const candidateDiagnostics: PipelineCandidateDiagnostic[] = candidates.map((candidate) => {
     const key = `${candidate.providerId}::${candidate.connectionId}::${candidate.routeId}`;
+    const probe = compatibilityProbeByCandidateKey.get(key);
     return {
       routeId: candidate.routeId,
       providerId: candidate.providerId,
       connectionId: candidate.connectionId,
       activationState: candidate.activationState,
       strictZeroCostSafe: candidate.strictZeroCostSafe,
+      compatibilityProbeEligible: probe?.eligible ?? false,
+      compatibilityEvidenceFresh: probe?.evidenceFresh ?? false,
       disposition: safeSet.dispositionByKey.get(key) ?? {
         kind: "JARVIS_REJECTED",
         reason: "NO_SAFE_ROUTE",

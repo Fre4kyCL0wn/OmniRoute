@@ -5,6 +5,8 @@ export const JARVIS_FREE_CODING_RECONCILE_INTERVAL_ENV =
   "OMNIROUTE_JARVIS_AUTONOMOUS_RECONCILIATION_INTERVAL_MS";
 export const JARVIS_FREE_CODING_MAX_ACTIVATIONS_ENV =
   "OMNIROUTE_JARVIS_AUTONOMOUS_MAX_ACTIVATIONS_PER_RUN";
+export const JARVIS_FREE_CODING_MAX_COMPATIBILITY_PROBES_ENV =
+  "OMNIROUTE_JARVIS_AUTONOMOUS_MAX_COMPATIBILITY_PROBES_PER_RUN";
 export const JARVIS_AUTO_SUPERVISOR_ENV = "OMNIROUTE_JARVIS_AUTO_SUPERVISOR";
 export const JARVIS_AUTO_FALLBACK_MODEL_ENV = "OMNIROUTE_JARVIS_AUTO_FALLBACK_MODEL";
 
@@ -12,6 +14,7 @@ const DEFAULT_INTERVAL_MS = 10 * 60 * 1000;
 const MIN_INTERVAL_MS = 60 * 1000;
 const MAX_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_ACTIVATIONS = 3;
+const DEFAULT_MAX_COMPATIBILITY_PROBES = 2;
 const TRUE_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 
 function boundedInteger(
@@ -42,6 +45,17 @@ export function getJarvisFreeCodingMaxActivations(env: NodeJS.ProcessEnv = proce
     DEFAULT_MAX_ACTIVATIONS,
     0,
     10
+  );
+}
+
+export function getJarvisFreeCodingMaxCompatibilityProbes(
+  env: NodeJS.ProcessEnv = process.env
+): number {
+  return boundedInteger(
+    env[JARVIS_FREE_CODING_MAX_COMPATIBILITY_PROBES_ENV],
+    DEFAULT_MAX_COMPATIBILITY_PROBES,
+    0,
+    5
   );
 }
 

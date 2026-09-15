@@ -8,6 +8,7 @@
 import { createCombo, getComboById, getComboByName, getCombos, updateCombo } from "@/lib/db/combos";
 import { getActivationApproval } from "@/lib/db/providerActivationApprovals";
 import { getProviderObservationInventory } from "@/lib/db/providerObservedModels";
+import { getProviderModelCompatibilityInventory } from "@/lib/db/providerModelCompatibility";
 import { getRawProviderConnections } from "@/lib/db/providers";
 import {
   getSyncedAvailableModelsByConnection,
@@ -26,6 +27,7 @@ import {
   type ShadowManagedComboArtifact,
 } from "./shadowControlPlaneAdapter";
 import type { ProviderObservationInventory } from "../providerOnboarding/types";
+import type { ProviderModelCompatibilityInventory } from "../providerOnboarding/compatibility";
 import { applyManagedComboReconciliation, type ManagedComboApplyResult } from "./managedComboApply";
 import {
   observeConnectionBillingSafety,
@@ -181,9 +183,13 @@ export async function buildManagedFreeCodingDryRun(
   );
 
   const observationInventoryByConnection = new Map<string, ProviderObservationInventory>();
+  const compatibilityInventoryByConnection = new Map<string, ProviderModelCompatibilityInventory>();
   for (const connection of connections) {
     const inventory = getProviderObservationInventory(connection.connectionId);
     if (inventory) observationInventoryByConnection.set(connection.connectionId, inventory);
+    const compatibility = getProviderModelCompatibilityInventory(connection.connectionId);
+    if (compatibility)
+      compatibilityInventoryByConnection.set(connection.connectionId, compatibility);
   }
 
   const providers = [...new Set(connections.map((c) => c.provider))];
@@ -261,6 +267,7 @@ export async function buildManagedFreeCodingDryRun(
     quota: { quotaPressure },
     now: nowMs,
     observationInventoryByConnection,
+    compatibilityInventoryByConnection,
     runtimeStateByRoute,
     resolveApproval: (canonicalModelId, connectionId) =>
       getActivationApproval(connectionId, canonicalModelId),

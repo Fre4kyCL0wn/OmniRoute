@@ -4,6 +4,10 @@ import type { ActivationOrchestrationResult } from "../providerOnboarding/activa
 import type { ConnectionBillingObservation } from "./connectionBillingObservation";
 import type { ManagedComboApplyResult } from "./managedComboApply";
 import type { ManagedFreeCodingDryRun } from "./managedFreeCodingControlPlane";
+import type {
+  ClaudeCodeCompatibilityFailureClass,
+  ClaudeCodeCompatibilityProbeState,
+} from "../providerOnboarding/compatibility";
 
 export const R47_AUTONOMOUS_APPROVER = "jarvis-r47-autonomous-reconciliation";
 export const R47_DEFAULT_MAX_ACTIVATIONS_PER_RUN = 3;
@@ -19,9 +23,16 @@ export interface AutonomousActivationAttempt extends AutonomousActivationTarget 
   reasonCodes: string[];
 }
 
+export interface AutonomousCompatibilityProbeAttempt extends AutonomousActivationTarget {
+  state: ClaudeCodeCompatibilityProbeState | "ERROR";
+  failureClass: ClaudeCodeCompatibilityFailureClass | "scheduler_error" | null;
+  latencyMs: number | null;
+}
+
 export interface AutonomousFreeCodingResult {
   initialDryRun: ManagedFreeCodingDryRun;
   finalDryRun: ManagedFreeCodingDryRun;
+  compatibilityProbes: AutonomousCompatibilityProbeAttempt[];
   activations: AutonomousActivationAttempt[];
   apply: ManagedComboApplyResult;
 }
@@ -29,6 +40,7 @@ export interface AutonomousFreeCodingResult {
 export interface AutonomousFreeCodingOptions {
   nowMs?: number;
   maxActivationsPerRun?: number;
+  maxCompatibilityProbesPerRun?: number;
 }
 
 export interface AutonomousFreeCodingDeps {
@@ -44,6 +56,11 @@ export interface AutonomousFreeCodingDeps {
     billingObservation: ConnectionBillingObservation | undefined,
     nowMs: number
   ) => Promise<ActivationOrchestrationResult>;
+  probeCompatibilityCandidates?: (
+    dryRun: ManagedFreeCodingDryRun,
+    nowMs: number,
+    limit: number
+  ) => Promise<AutonomousCompatibilityProbeAttempt[]>;
 }
 
 function strictPendingTargets(dryRun: ManagedFreeCodingDryRun): AutonomousActivationTarget[] {
@@ -73,16 +90,32 @@ function boundedActivationLimit(value: number | undefined): number {
   return Math.max(0, Math.min(10, Math.trunc(value ?? 0)));
 }
 
+function boundedProbeLimit(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 2;
+  return Math.max(0, Math.min(5, Math.trunc(value ?? 0)));
+}
+
 export async function runAutonomousFreeCodingReconciliationCore(
   options: AutonomousFreeCodingOptions,
   deps: AutonomousFreeCodingDeps
 ): Promise<AutonomousFreeCodingResult> {
   const nowMs = options.nowMs ?? Date.now();
   const initialDryRun = await deps.buildDryRun({ refreshObservations: true, nowMs });
+  const compatibilityProbes = deps.probeCompatibilityCandidates
+    ? await deps.probeCompatibilityCandidates(
+        initialDryRun,
+        nowMs,
+        boundedProbeLimit(options.maxCompatibilityProbesPerRun)
+      )
+    : [];
+  const workingDryRun =
+    compatibilityProbes.length > 0
+      ? await deps.buildDryRun({ refreshObservations: false, nowMs })
+      : initialDryRun;
   const billingByConnection = new Map(
     initialDryRun.billingObservation.map((item) => [item.connectionId, item])
   );
-  const targets = strictPendingTargets(initialDryRun).slice(
+  const targets = strictPendingTargets(workingDryRun).slice(
     0,
     boundedActivationLimit(options.maxActivationsPerRun)
   );
@@ -113,8 +146,8 @@ export async function runAutonomousFreeCodingReconciliationCore(
   }
 
   const finalDryRun = stateMayHaveChanged
-    ? await deps.buildDryRun({ refreshObservations: true, nowMs })
-    : initialDryRun;
+    ? await deps.buildDryRun({ refreshObservations: false, nowMs })
+    : workingDryRun;
   const apply = await deps.applyDryRun(finalDryRun, nowMs);
-  return { initialDryRun, finalDryRun, activations, apply };
+  return { initialDryRun, finalDryRun, compatibilityProbes, activations, apply };
 }

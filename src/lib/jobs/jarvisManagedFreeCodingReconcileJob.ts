@@ -6,6 +6,7 @@ import {
   JARVIS_FREE_CODING_RECONCILE_ENV,
   JARVIS_FREE_CODING_RECONCILE_JOB_ID,
   getJarvisFreeCodingMaxActivations,
+  getJarvisFreeCodingMaxCompatibilityProbes,
   getJarvisFreeCodingReconcileIntervalMs,
   isJarvisFreeCodingAutonomyEnabled,
   isJarvisAutoSupervisorEnabled,
@@ -16,6 +17,7 @@ export {
   JARVIS_FREE_CODING_RECONCILE_ENV,
   JARVIS_FREE_CODING_RECONCILE_JOB_ID,
   getJarvisFreeCodingMaxActivations,
+  getJarvisFreeCodingMaxCompatibilityProbes,
   getJarvisFreeCodingReconcileIntervalMs,
   isJarvisFreeCodingAutonomyEnabled,
   isJarvisAutoSupervisorEnabled,
@@ -29,6 +31,7 @@ export function registerJarvisManagedFreeCodingReconcileJob(
   if (!isJarvisFreeCodingAutonomyEnabled(env)) return false;
   const intervalMs = getJarvisFreeCodingReconcileIntervalMs(env);
   const maxActivationsPerRun = getJarvisFreeCodingMaxActivations(env);
+  const maxCompatibilityProbesPerRun = getJarvisFreeCodingMaxCompatibilityProbes(env);
   const jarvisAutoEnabled = isJarvisAutoSupervisorEnabled(env);
   const jarvisAutoFallbackModel = getJarvisAutoFallbackModel(env);
   const now = new Date().toISOString();
@@ -45,14 +48,20 @@ export function registerJarvisManagedFreeCodingReconcileJob(
       policyMode: "strict_zero_cost",
       providerDiscovery: "dynamic",
       maxActivationsPerRun,
+      maxCompatibilityProbesPerRun,
       jarvisAutoEnabled,
       jarvisAutoFallbackConfigured: Boolean(jarvisAutoFallbackModel),
     },
     createdAt: now,
     updatedAt: now,
     handler: async () => {
-      const result = await runAutonomousFreeCodingReconciliation({ maxActivationsPerRun });
+      const result = await runAutonomousFreeCodingReconciliation({
+        maxActivationsPerRun,
+        maxCompatibilityProbesPerRun,
+      });
       const activated = result.activations.filter((item) => item.status === "ACTIVATED").length;
+      const probes = result.compatibilityProbes.length;
+      const probePasses = result.compatibilityProbes.filter((item) => item.state === "PASS").length;
       const applied = result.apply.status === "APPLIED" ? 1 : 0;
       const managedOk =
         result.apply.status !== "BLOCKED" && result.apply.status !== "VERIFICATION_FAILED";
@@ -62,7 +71,7 @@ export function registerJarvisManagedFreeCodingReconcileJob(
       const autoOk = !auto || (auto.status !== "BLOCKED" && auto.status !== "VERIFICATION_FAILED");
       const success = managedOk && autoOk;
       console.info(
-        `[JarvisR47] free-coding reconcile: candidates=${result.finalDryRun.artifact.pipelineSummary.totalCandidates} strict=${result.finalDryRun.artifact.pipelineSummary.safeCandidateCount.strictZeroCost} activations=${activated} apply=${result.apply.status}/${result.apply.action}`
+        `[JarvisR47] free-coding reconcile: candidates=${result.finalDryRun.artifact.pipelineSummary.totalCandidates} strict=${result.finalDryRun.artifact.pipelineSummary.safeCandidateCount.strictZeroCost} probes=${probes}/${probePasses}pass activations=${activated} apply=${result.apply.status}/${result.apply.action}`
       );
       if (auto) {
         console.info(
@@ -79,7 +88,7 @@ export function registerJarvisManagedFreeCodingReconcileJob(
         errorParts.push(`jarvis-auto ${auto.status}: ${auto.reasonCodes.join(",")}`);
       return {
         success,
-        recordsAffected: activated + applied + autoApplied,
+        recordsAffected: probes + activated + applied + autoApplied,
         error: success ? undefined : errorParts.join("; "),
       };
     },

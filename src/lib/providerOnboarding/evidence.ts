@@ -20,6 +20,7 @@ import { findBudgetEntry } from "@omniroute/open-sse/services/autoCombo/strictZe
 import { evaluateZeroCostRoute } from "@omniroute/open-sse/services/autoCombo/zeroCostRouteEligibility.ts";
 import { produceCapabilities } from "@omniroute/open-sse/services/capabilityEligibility.ts";
 import type { ProviderObservationRecord } from "./types";
+import { compatibilityVerdict, type ProviderModelCompatibilityEvidence } from "./compatibility";
 
 export type UsageCostClass =
   "verified_free" | "free_tier" | "subscription_included" | "paid" | "unknown";
@@ -88,11 +89,29 @@ function observedToolCalling(record: ProviderObservationRecord | null | undefine
   return params.includes("tools") || params.includes("tool_choice") ? true : null;
 }
 
+/**
+ * Cost-only gate for active compatibility probes. It deliberately ignores
+ * capability/Claude verdicts because the probe exists to establish those.
+ * Provider traffic is allowed only when the exact live route is 0/0 priced,
+ * or the curated recurring-free model has both a hard stop and a connection
+ * that cannot spill into paid overage.
+ */
+export function isZeroCostSafeForCompatibilityProbe(evidence: ObservedModelEvidence): boolean {
+  if (evidence.catalogZeroPrice === true) return true;
+  return (
+    evidence.verifiedFree === true &&
+    evidence.hardStopGuaranteed === true &&
+    evidence.connectionSafeForZeroCost === true
+  );
+}
+
 export function resolveObservedModelEvidence(
   providerModelId: string,
   connection: BillableConnection,
   connectionActive: boolean,
-  record?: ProviderObservationRecord | null
+  record?: ProviderObservationRecord | null,
+  compatibilityEvidence?: ProviderModelCompatibilityEvidence | null,
+  nowMs: number = Date.now()
 ): ObservedModelEvidence {
   const providerId = connection.provider;
   const info = extractProviderModelInfo(providerId, providerModelId, {
@@ -101,6 +120,18 @@ export function resolveObservedModelEvidence(
     maxOutputTokens: record?.currentlyObserved ? record.maxOutput : null,
   });
   const caps = produceCapabilities(info);
+  const dynamicCompatibility = compatibilityVerdict(compatibilityEvidence, nowMs);
+  // A static proven incompatibility remains authoritative. Otherwise a fresh
+  // real /v1/messages tool roundtrip can prove compatibility and executability
+  // for a dynamically observed model that is not in the static registry yet.
+  const claudeCodeEligible =
+    caps.claudeCodeEligible === false
+      ? false
+      : dynamicCompatibility !== null
+        ? dynamicCompatibility
+        : caps.claudeCodeEligible;
+  const executable = dynamicCompatibility === true ? true : caps.executable;
+  const toolCalling = dynamicCompatibility === true ? true : info.toolCalling;
   const budget = findBudgetEntry({ provider: providerId, model: providerModelId });
   const freeType = budget?.freeType ?? null;
   const catalogZeroPrice = catalogZeroPriceFor(record);
@@ -114,8 +145,8 @@ export function resolveObservedModelEvidence(
   const hardStopGuaranteed = budget?.hardStopGuaranteed ?? null;
   const safety = resolveConnectionZeroCostSafety(connection);
   const route = evaluateZeroCostRoute({
-    executable: caps.executable,
-    compatibleForRequestedHarness: caps.claudeCodeEligible,
+    executable,
+    compatibleForRequestedHarness: claudeCodeEligible,
     connectionAvailable: connectionActive,
     unhealthy: null,
     quotaExhausted: null,
@@ -130,9 +161,9 @@ export function resolveObservedModelEvidence(
     inStaticRegistry: (getRegistryEntry(providerId)?.models ?? []).some(
       (m) => m.id === providerModelId
     ),
-    executable: caps.executable,
-    toolCalling: info.toolCalling,
-    claudeCodeEligible: caps.claudeCodeEligible,
+    executable,
+    toolCalling,
+    claudeCodeEligible,
     supervisorEligible: caps.supervisorEligible,
     verifiedFree,
     catalogZeroPrice,
@@ -141,7 +172,7 @@ export function resolveObservedModelEvidence(
     hardStopGuaranteed,
     usageCostClass: usageCostClassFor(connection, freeType, catalogZeroPrice),
     connectionSafeForZeroCost: safety.safe,
-    knownProtocolConflict: caps.claudeCodeEligible === false,
+    knownProtocolConflict: claudeCodeEligible === false,
     strictZeroCostEligible: route.eligible,
     strictZeroCostReason: route.reason,
   };

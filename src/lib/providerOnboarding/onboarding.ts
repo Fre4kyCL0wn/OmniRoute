@@ -10,6 +10,7 @@
 import type { BillableConnection } from "@omniroute/open-sse/services/autoCombo/connectionBilling.ts";
 
 import { resolveObservedModelEvidence, type ObservedModelEvidence } from "./evidence";
+import type { ProviderModelCompatibilityInventory } from "./compatibility";
 import type {
   ObservationRefreshStatus,
   ProviderObservationInventory,
@@ -78,6 +79,8 @@ export function resolveProviderObservations(input: {
   connection: BillableConnection & { isActive: boolean };
   /** Operator-hidden model ids for this provider (display only). */
   hiddenModelIds?: ReadonlySet<string>;
+  compatibilityInventory?: ProviderModelCompatibilityInventory | null;
+  nowMs?: number;
 }): ProviderObservationResolution {
   const { inventory, connection } = input;
   const hidden = input.hiddenModelIds ?? new Set<string>();
@@ -87,7 +90,9 @@ export function resolveProviderObservations(input: {
       record.providerModelId,
       connection,
       connection.isActive,
-      record
+      record,
+      input.compatibilityInventory?.models?.[record.providerModelId] ?? null,
+      input.nowMs ?? Date.now()
     );
     const isHidden = hidden.has(record.providerModelId);
     return {
