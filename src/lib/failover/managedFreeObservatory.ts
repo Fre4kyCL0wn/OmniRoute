@@ -36,6 +36,21 @@ export interface ManagedFreeObservatoryCandidate {
   toolCalling: boolean | null;
 }
 
+export interface ManagedFreeObservatoryCostLadder {
+  subscriptionRequested: boolean;
+  subscriptionActive: boolean;
+  paidRequested: boolean;
+  paidActive: boolean;
+  budgetWindow: "daily" | "monthly";
+  accountingComplete: boolean;
+  cheapBudgetUsd: number;
+  cheapSpendUsd: number;
+  cheapRemainingUsd: number;
+  premiumBudgetUsd: number;
+  premiumSpendUsd: number;
+  premiumRemainingUsd: number;
+}
+
 export interface ManagedFreeObservatorySnapshot {
   generatedAt: string;
   strategy: string | null;
@@ -45,6 +60,7 @@ export interface ManagedFreeObservatorySnapshot {
   providerCount: number;
   providers: ManagedFreeObservatoryProvider[];
   candidates: ManagedFreeObservatoryCandidate[];
+  costLadder?: ManagedFreeObservatoryCostLadder;
 }
 
 function lifecycleCount(

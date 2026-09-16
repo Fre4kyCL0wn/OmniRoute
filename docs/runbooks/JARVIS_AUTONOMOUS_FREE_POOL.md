@@ -51,3 +51,14 @@ After rollout verify container health, loopback port bindings, authenticated `/v
 Keep the previous production image and a stopped rollback container or equivalent recreate metadata. Rollback restores the prior runtime image while keeping the current persistent data volume only when schema compatibility is confirmed; otherwise restore the matching pre-rollout SQLite backup.
 
 Do not delete the last known-good image, current database backup, Compose backup or container inspect until the new runtime has passed the final acceptance checks.
+
+## Cost ladder
+
+`jarvis-auto` schema v2 extends the strict-free runtime with guarded escalation: `jarvis-managed/free-coding` → verified zero-cost fallback → `auto/subscription` → optional `auto/thrifty`.
+
+Subscription routing is enabled by default and uses only connections classified as plan-included by the curated connection-billing catalog. Hard-stop quota exhaustion falls through rather than producing incremental API spend.
+
+Paid routing is disabled by default. Enabling it requires `OMNIROUTE_JARVIS_AUTO_PAID_ROUTING_ENABLED=true` plus explicit `cheap` and `premium` USD budgets in `settings.subscriptionLadder.rungBudgetUsd`; use `0` to disable either rung. Missing either budget keeps paid escalation disabled.
+The budget window defaults to `monthly` and may be set to `daily`. Spend is computed from successful OmniRoute usage history. If any paid usage row cannot be priced, accounting becomes incomplete and paid rungs fail closed. The observatory shows budget, spend, remaining amount, window, and accounting state.
+
+Recommended production default remains: subscription enabled, paid routing disabled, `cheap=0`, `premium=0`. Raise budgets only after the corresponding provider connections and pricing evidence have been validated.

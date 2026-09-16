@@ -18,6 +18,15 @@ function badgeClass(state: string): string {
   return "bg-bg text-text-muted";
 }
 
+function formatUsd(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
 function formatTime(value: string | number | null): string {
   if (value === null) return "—";
   const date = new Date(value);
@@ -112,6 +121,56 @@ export default function FreePoolObservatoryTab() {
           <div className="text-xl font-semibold">{data.strategy ?? "none"}</div>
         </Card>
       </div>
+
+      {data.costLadder ? (
+        <Card
+          title="Jarvis cost ladder"
+          subtitle={`Budget window: ${data.costLadder.budgetWindow} · accounting ${data.costLadder.accountingComplete ? "complete" : "blocked/incomplete"}`}
+        >
+          <div className="grid gap-4 md:grid-cols-4">
+            <div>
+              <div className="text-xs text-text-muted">Subscription</div>
+              <div className="font-semibold">
+                {data.costLadder.subscriptionActive
+                  ? "ACTIVE"
+                  : data.costLadder.subscriptionRequested
+                    ? "READY"
+                    : "OFF"}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-text-muted">Paid routing</div>
+              <div className="font-semibold">
+                {data.costLadder.paidActive
+                  ? "ACTIVE"
+                  : data.costLadder.paidRequested
+                    ? "ARMED / NO BUDGET"
+                    : "OFF"}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-text-muted">Cheap rung</div>
+              <div className="font-semibold">
+                {formatUsd(data.costLadder.cheapSpendUsd)} /{" "}
+                {formatUsd(data.costLadder.cheapBudgetUsd)}
+              </div>
+              <div className="text-xs text-text-muted">
+                {formatUsd(data.costLadder.cheapRemainingUsd)} remaining
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-text-muted">Premium rung</div>
+              <div className="font-semibold">
+                {formatUsd(data.costLadder.premiumSpendUsd)} /{" "}
+                {formatUsd(data.costLadder.premiumBudgetUsd)}
+              </div>
+              <div className="text-xs text-text-muted">
+                {formatUsd(data.costLadder.premiumRemainingUsd)} remaining
+              </div>
+            </div>
+          </div>
+        </Card>
+      ) : null}
 
       <Card title="Provider health" subtitle={`Snapshot ${formatTime(data.generatedAt)}`}>
         <div className="overflow-x-auto">

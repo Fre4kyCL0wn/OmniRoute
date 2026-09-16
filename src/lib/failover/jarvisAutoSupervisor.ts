@@ -1,5 +1,6 @@
 /** R4.8 runtime apply for the stable `jarvis-auto` supervisor combo. */
 import { createCombo, getComboById, getComboByName, updateCombo } from "@/lib/db/combos";
+import { getSettings } from "@/lib/db/settings";
 import {
   buildJarvisAutoDesiredState,
   fingerprintJarvisAutoCurrent,
@@ -25,6 +26,7 @@ export interface JarvisAutoSupervisorDeps {
     id: string,
     data: Record<string, unknown>
   ) => Promise<Record<string, unknown> | null>;
+  getSettings?: () => Promise<Record<string, unknown>>;
 }
 
 const DEFAULT_DEPS: JarvisAutoSupervisorDeps = {
@@ -32,12 +34,35 @@ const DEFAULT_DEPS: JarvisAutoSupervisorDeps = {
   getComboById,
   createCombo,
   updateCombo,
+  getSettings,
 };
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function envFlag(value: string | undefined, defaultValue: boolean): boolean {
+  if (value === undefined) return defaultValue;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return defaultValue;
+}
+
+function hasExplicitPaidBudget(settings: Record<string, unknown>): boolean {
+  const ladder = record(settings.subscriptionLadder);
+  const budgets = record(ladder?.rungBudgetUsd);
+  if (!budgets) return false;
+  const cheap = budgets.cheap;
+  const premium = budgets.premium;
+  // Jarvis requires BOTH paid rungs to be explicit. Missing must never mean
+  // "unlimited" when one sibling rung happens to have a budget. Zero disables
+  // a rung; at least one rung must be positively budgeted to enable escalation.
+  if (typeof cheap !== "number" || !Number.isFinite(cheap) || cheap < 0) return false;
+  if (typeof premium !== "number" || !Number.isFinite(premium) || premium < 0) return false;
+  return cheap > 0 || premium > 0;
 }
 
 function ownerFingerprint(raw: Record<string, unknown> | null): string | null {
@@ -53,7 +78,12 @@ function ownedByJarvisAuto(raw: Record<string, unknown> | null): boolean {
 }
 
 export async function reconcileJarvisAutoSupervisor(
-  options: { fallbackRoute?: string | null; nowIso?: string } = {},
+  options: {
+    fallbackRoute?: string | null;
+    nowIso?: string;
+    subscriptionEnabled?: boolean;
+    paidRoutingEnabled?: boolean;
+  } = {},
   deps: JarvisAutoSupervisorDeps = DEFAULT_DEPS
 ): Promise<JarvisAutoApplyResult> {
   const strictChild = await deps.getComboByName(JARVIS_AUTO_STRICT_CHILD);
@@ -61,7 +91,23 @@ export async function reconcileJarvisAutoSupervisor(
   const fallback = parseJarvisAutoFallbackRoute(
     options.fallbackRoute ?? process.env.OMNIROUTE_JARVIS_AUTO_FALLBACK_MODEL
   );
-  const desired = buildJarvisAutoDesiredState({ strictChildEnabled, fallback });
+  const settings = deps.getSettings ? await deps.getSettings() : {};
+  const subscriptionEnabled =
+    options.subscriptionEnabled ??
+    envFlag(process.env.OMNIROUTE_JARVIS_AUTO_SUBSCRIPTION_ENABLED, true);
+  const paidRequested =
+    options.paidRoutingEnabled ??
+    envFlag(process.env.OMNIROUTE_JARVIS_AUTO_PAID_ROUTING_ENABLED, false);
+  // Paid escalation is double-gated: an explicit Jarvis opt-in AND at least
+  // one positive rung budget in settings. "Enable paid" without a dollar cap
+  // therefore remains fail-closed rather than becoming an unlimited spend switch.
+  const thriftyEnabled = paidRequested && hasExplicitPaidBudget(settings);
+  const desired = buildJarvisAutoDesiredState({
+    strictChildEnabled,
+    subscriptionEnabled,
+    thriftyEnabled,
+    fallback,
+  });
   if (!desired) {
     return {
       status: "BLOCKED",

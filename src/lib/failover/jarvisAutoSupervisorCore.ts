@@ -2,7 +2,9 @@
 
 export const JARVIS_AUTO_COMBO_NAME = "jarvis-auto";
 export const JARVIS_AUTO_STRICT_CHILD = "jarvis-managed/free-coding";
-export const JARVIS_AUTO_SCHEMA_VERSION = 1;
+export const JARVIS_AUTO_SCHEMA_VERSION = 2;
+export const JARVIS_AUTO_SUBSCRIPTION_ROUTE = "auto/subscription";
+export const JARVIS_AUTO_THRIFTY_ROUTE = "auto/thrifty";
 
 export interface JarvisAutoFallbackRoute {
   routeId: string;
@@ -36,13 +38,13 @@ export function parseJarvisAutoFallbackRoute(
   return { routeId, providerId: routeId.slice(0, slash) };
 }
 
-export function computeJarvisAutoFingerprint(input: {
+function computeJarvisAutoFingerprintV1(input: {
   strictChildEnabled: boolean;
   fallback: JarvisAutoFallbackRoute | null;
 }): string {
   return stableHash(
     JSON.stringify({
-      v: JARVIS_AUTO_SCHEMA_VERSION,
+      v: 1,
       strictChild: input.strictChildEnabled ? JARVIS_AUTO_STRICT_CHILD : null,
       fallback: input.fallback?.routeId ?? null,
       strategy: "priority",
@@ -52,11 +54,39 @@ export function computeJarvisAutoFingerprint(input: {
   );
 }
 
+export function computeJarvisAutoFingerprint(input: {
+  strictChildEnabled: boolean;
+  subscriptionEnabled: boolean;
+  thriftyEnabled: boolean;
+  fallback: JarvisAutoFallbackRoute | null;
+}): string {
+  return stableHash(
+    JSON.stringify({
+      v: JARVIS_AUTO_SCHEMA_VERSION,
+      strictChild: input.strictChildEnabled ? JARVIS_AUTO_STRICT_CHILD : null,
+      subscription: input.subscriptionEnabled ? JARVIS_AUTO_SUBSCRIPTION_ROUTE : null,
+      fallback: input.fallback?.routeId ?? null,
+      thrifty: input.thriftyEnabled ? JARVIS_AUTO_THRIFTY_ROUTE : null,
+      strategy: "priority",
+      nestedComboMode: "execute",
+      costPolicy: "strict-free>verified-zero>subscription>budgeted-paid",
+    })
+  );
+}
+
 export function buildJarvisAutoDesiredState(input: {
   strictChildEnabled: boolean;
+  subscriptionEnabled: boolean;
+  thriftyEnabled: boolean;
   fallback: JarvisAutoFallbackRoute | null;
 }): JarvisAutoDesiredState | null {
-  if (!input.strictChildEnabled && !input.fallback) return null;
+  if (
+    !input.strictChildEnabled &&
+    !input.fallback &&
+    !input.subscriptionEnabled &&
+    !input.thriftyEnabled
+  )
+    return null;
   const models: Array<Record<string, unknown>> = [];
   if (input.strictChildEnabled) {
     models.push({
@@ -73,8 +103,28 @@ export function buildJarvisAutoDesiredState(input: {
       kind: "model",
       model: input.fallback.routeId,
       providerId: input.fallback.providerId,
-      weight: 0,
-      label: "Jarvis operator-verified independent fallback",
+      weight: 90,
+      label: "Jarvis operator-verified zero-cost fallback",
+    });
+  }
+  if (input.subscriptionEnabled) {
+    models.push({
+      id: "jarvis-auto-subscription",
+      kind: "model",
+      model: JARVIS_AUTO_SUBSCRIPTION_ROUTE,
+      providerId: "auto",
+      weight: 70,
+      label: "Jarvis plan-included subscription capacity",
+    });
+  }
+  if (input.thriftyEnabled) {
+    models.push({
+      id: "jarvis-auto-budgeted-paid",
+      kind: "model",
+      model: JARVIS_AUTO_THRIFTY_ROUTE,
+      providerId: "auto",
+      weight: 10,
+      label: "Jarvis budget-gated cheap/premium escalation",
     });
   }
   const fingerprint = computeJarvisAutoFingerprint(input);
@@ -88,10 +138,12 @@ export function buildJarvisAutoDesiredState(input: {
         schemaVersion: JARVIS_AUTO_SCHEMA_VERSION,
         logicalId: JARVIS_AUTO_COMBO_NAME,
         taskClass: "coding",
-        costPolicy: "strict-free-first",
-        providerDiscovery: "dynamic-via-managed-pool",
+        costPolicy: "strict-free>verified-zero>subscription>budgeted-paid",
+        providerDiscovery: "dynamic-via-managed-pool+auto-ladder",
         strictManagedCombo: input.strictChildEnabled ? JARVIS_AUTO_STRICT_CHILD : null,
         fallbackRoute: input.fallback?.routeId ?? null,
+        subscriptionRoute: input.subscriptionEnabled ? JARVIS_AUTO_SUBSCRIPTION_ROUTE : null,
+        paidEscalationRoute: input.thriftyEnabled ? JARVIS_AUTO_THRIFTY_ROUTE : null,
         lastAppliedFingerprint: fingerprint,
       },
     },
@@ -120,5 +172,26 @@ export function fingerprintJarvisAutoCurrent(raw: Record<string, unknown>): stri
     fallbackStep && typeof fallbackStep.model === "string"
       ? parseJarvisAutoFallbackRoute(fallbackStep.model)
       : null;
-  return computeJarvisAutoFingerprint({ strictChildEnabled, fallback });
+  const ownerSchemaVersion = typeof owner?.schemaVersion === "number" ? owner.schemaVersion : 1;
+  if (ownerSchemaVersion < 2) {
+    return computeJarvisAutoFingerprintV1({ strictChildEnabled, fallback });
+  }
+  const subscriptionEnabled = models.some(
+    (step) =>
+      step?.kind === "model" &&
+      step.id === "jarvis-auto-subscription" &&
+      step.model === JARVIS_AUTO_SUBSCRIPTION_ROUTE
+  );
+  const thriftyEnabled = models.some(
+    (step) =>
+      step?.kind === "model" &&
+      step.id === "jarvis-auto-budgeted-paid" &&
+      step.model === JARVIS_AUTO_THRIFTY_ROUTE
+  );
+  return computeJarvisAutoFingerprint({
+    strictChildEnabled,
+    subscriptionEnabled,
+    thriftyEnabled,
+    fallback,
+  });
 }

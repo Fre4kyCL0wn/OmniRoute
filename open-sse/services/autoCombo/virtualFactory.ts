@@ -36,7 +36,9 @@ import {
   filterSubscriptionOnlyCandidates,
   orderPoolByRung,
   type LadderOptions,
+  type LadderRung,
 } from "./subscriptionLadder";
+import { computeRungSpendSnapshot, type RungBudgetWindow } from "./rungSpendLedger";
 import {
   classifyStrictZeroCostCandidate,
   filterStrictZeroCostCandidates,
@@ -185,6 +187,11 @@ export interface PreparedVirtualAutoComboInputs {
   readonly authTypeByConnectionId?: ReadonlyMap<string, string | null>;
   /** Operator settings for the subscription ladder; absent = feature off. */
   readonly subscriptionLadder?: SubscriptionLadderSettings;
+  /** Paid-rung spend for the configured budget window. */
+  readonly rungSpendUsd?: Partial<Record<LadderRung, number>>;
+  /** False blocks paid rungs whenever their spend cannot be priced completely. */
+  readonly rungSpendAccountingComplete?: boolean;
+  readonly rungSpendWindow?: RungBudgetWindow;
 }
 
 /**
@@ -202,6 +209,7 @@ export interface SubscriptionLadderSettings {
   exitCutoffPercent?: number;
   reentryMinRemainingPercent?: number;
   rungBudgetUsd?: Record<string, number>;
+  budgetWindow?: RungBudgetWindow;
   /** Staleness bound for a cached quota reading, derived from the existing
    * `autoRefreshProviderQuotaInterval` exactly as STRICT_ZERO_COST does. */
   maxStateAgeMs: number;
@@ -220,8 +228,10 @@ function readSubscriptionLadderSettings(
       : undefined;
   const exitCutoffPercent = numeric("exitCutoffPercent");
   const reentryMinRemainingPercent = numeric("reentryMinRemainingPercent");
+  const budgetWindow = value.budgetWindow === "daily" ? "daily" : "monthly";
   return {
     maxStateAgeMs,
+    budgetWindow,
     ...(exitCutoffPercent === undefined ? {} : { exitCutoffPercent }),
     ...(reentryMinRemainingPercent === undefined ? {} : { reentryMinRemainingPercent }),
     ...(value.rungBudgetUsd && typeof value.rungBudgetUsd === "object"
@@ -266,6 +276,11 @@ function buildLadderOptions(
       ? {}
       : { reentryMinRemainingPercent: tuning.reentryMinRemainingPercent }),
     ...(tuning?.rungBudgetUsd ? { rungBudgetUsd: tuning.rungBudgetUsd } : {}),
+    resolveRungSpendUsd: (rung) => {
+      if (rung !== "cheap" && rung !== "premium") return 0;
+      if (prepared.rungSpendAccountingComplete === false) return Number.POSITIVE_INFINITY;
+      return prepared.rungSpendUsd?.[rung] ?? 0;
+    },
   };
 }
 
@@ -804,8 +819,43 @@ export async function prepareVirtualAutoComboInputs(
     authTypeByConnectionId.set(conn.id, typeof conn.authType === "string" ? conn.authType : null);
   }
   const subscriptionLadder = readSubscriptionLadderSettings(settings);
+  const paidBudgetConfigured = ["cheap", "premium"].some((rung) => {
+    const value = subscriptionLadder.rungBudgetUsd?.[rung];
+    return typeof value === "number" && Number.isFinite(value) && value > 0;
+  });
+  let rungSpendUsd: Partial<Record<LadderRung, number>> | undefined;
+  let rungSpendAccountingComplete: boolean | undefined;
+  let rungSpendWindow: RungBudgetWindow | undefined;
+  if (paidBudgetConfigured) {
+    try {
+      const snapshot = await computeRungSpendSnapshot({
+        window: subscriptionLadder.budgetWindow,
+        resolveAuthType: (connectionId) => authTypeByConnectionId.get(connectionId) ?? null,
+      });
+      rungSpendUsd = snapshot.spendUsd;
+      rungSpendAccountingComplete = snapshot.accountingComplete;
+      rungSpendWindow = snapshot.window;
+      if (!snapshot.accountingComplete) {
+        log.warn(
+          "AUTO",
+          `Paid-rung spend accounting is incomplete (${snapshot.unpricedRows} unpriced row(s)); paid rungs fail closed.`
+        );
+      }
+    } catch (error) {
+      rungSpendAccountingComplete = false;
+      rungSpendWindow = subscriptionLadder.budgetWindow;
+      log.warn("AUTO", "Failed to build paid-rung spend ledger; paid rungs fail closed", { error });
+    }
+  }
+  const ladderPrepared = {
+    authTypeByConnectionId,
+    subscriptionLadder,
+    ...(rungSpendUsd ? { rungSpendUsd } : {}),
+    ...(rungSpendAccountingComplete === undefined ? {} : { rungSpendAccountingComplete }),
+    ...(rungSpendWindow ? { rungSpendWindow } : {}),
+  };
   if (!options.includeResolvedCapabilities) {
-    return { regularCandidates, familyCandidates, authTypeByConnectionId, subscriptionLadder };
+    return { regularCandidates, familyCandidates, ...ladderPrepared };
   }
 
   // One uninterrupted bulk read of all three capability tables for this prepare only.
@@ -819,8 +869,7 @@ export async function prepareVirtualAutoComboInputs(
   return {
     regularCandidates: await attachPreparedCapabilityValues(regularCandidates, capabilityState),
     familyCandidates: await attachPreparedCapabilityValues(familyCandidates, capabilityState),
-    authTypeByConnectionId,
-    subscriptionLadder,
+    ...ladderPrepared,
   };
 }
 

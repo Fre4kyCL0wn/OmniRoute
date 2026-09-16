@@ -2379,3 +2379,16 @@ F3.3H projects each observed route into `QUARANTINE`, `ACTIVE`, `DEGRADED`, `COO
 F3.3I exposes a secret-free observability projection at `/api/jarvis/free-pool/observatory` and in Dashboard → Analytics → Free Pool. It reports runtime/account/quota state, lifecycle, compatibility freshness, zero-cost evidence, ranking, context/tool facts, last-observed/last-success timestamps and the current exclusion reason.
 
 F3.4 acceptance keeps `strict_zero_cost` as a hard boundary. A 429, provider outage or removed model may switch cross-provider only to another already-routable strict-free candidate. Paid or cost-unproven routes are rejected even when they are otherwise healthy; transient failures wait for their known cooldown when no safe route remains.
+
+## Jarvis Cost Ladder (F3.5)
+
+F3.5 promotes `jarvis-auto` from a strict-free supervisor with one verified fallback into a guarded cost ladder. The supervisor schema is version 2 and orders routes as: managed strict-free child, operator-verified zero-cost fallback, `auto/subscription`, then optional `auto/thrifty` paid escalation.
+
+The subscription rung reuses OmniRoute's existing connection-billing catalog and quota-aware `auto/subscription` path. Curated hard-stop subscription connections such as Claude Code OAuth and Codex OAuth can therefore consume already-paid plan capacity without being treated as metered API spend.
+
+Paid escalation is fail-closed and double-gated. `OMNIROUTE_JARVIS_AUTO_PAID_ROUTING_ENABLED=true` is necessary but insufficient: both `cheap` and `premium` budgets must be explicitly present under `settings.subscriptionLadder.rungBudgetUsd`, and at least one must be greater than zero. A zero budget disables that rung; a missing sibling budget disables Jarvis paid escalation entirely.
+`auto/thrifty` now receives a real spend ledger derived from successful `usage_history` rows for the configured daily or monthly budget window. The ledger classifies each metered row into cheap or premium and prices it with the merged OmniRoute pricing database. Subscription/keyless rows do not consume paid budget. Missing pricing or ledger failure marks accounting incomplete and blocks paid rungs by construction.
+
+The Free Pool observatory also exposes the Jarvis cost-ladder state: subscription requested/active, paid requested/active, budget window, accounting completeness, per-rung budget, current spend, and remaining budget. No credentials or billing identifiers are exposed.
+
+Schema-v1 `jarvis-auto` ownership fingerprints remain recognized during migration, so R50-era supervisors can be upgraded to schema v2 without a false operator-drift block. Operator-created or genuinely drifted combos remain protected by the existing ownership/read-back gates.
