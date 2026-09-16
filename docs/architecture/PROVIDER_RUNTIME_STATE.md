@@ -2364,3 +2364,18 @@ Shadow enables R4.7/R4.8 explicitly; Production has none of these opt-in variabl
 the unchanged production container/image throughout the proof. The focused R4.x audit after live
 activation passed 100/100 tests, O9 typecheck with zero errors, core typecheck, full ESLint, and
 `git diff --check`.
+
+## Autonomous Multi-Provider Free Pool (F3.3E-F3.3I / F3.4)
+
+F3.3E extends the R4.7 managed strict-free pool beyond credentialed provider observations. Approved no-auth providers enter through the same observation and compatibility pipeline using a synthetic connection identity. OpenCode is currently the only unattended no-auth provider admitted by the shared `noAuthAutoPolicy` allowlist.
+
+No-auth is not treated as Claude-Code compatibility. The public catalog is observed first, then the existing bounded `/v1/messages` tool-roundtrip probe must produce fresh PASS evidence. A dedicated `keylessZeroCost` fact records why the route is economically safe without pretending that it is local, hard-stop-billed or token-priced at zero.
+
+F3.3F computes deterministic quality scores from coding/tool/reasoning capability, context, runtime health, quota availability, probe latency and recent success/failure evidence. F3.3G then applies provider-diversity ordering so close-scoring routes on independent providers are interleaved rather than allowing one account to occupy every priority slot.
+The managed Combo preserves this ranked order for `priority` execution. Drift fingerprints remain order-independent, so a quality-order change is not confused with ownership drift while the executor still receives the intended preference order.
+
+F3.3H projects each observed route into `QUARANTINE`, `ACTIVE`, `DEGRADED`, `COOLDOWN`, `UNAVAILABLE` or `ARCHIVED`. Archive is historical state, not deletion. Rediscovery reuses retained observation and compatibility history and re-enters the normal qualification gates.
+
+F3.3I exposes a secret-free observability projection at `/api/jarvis/free-pool/observatory` and in Dashboard → Analytics → Free Pool. It reports runtime/account/quota state, lifecycle, compatibility freshness, zero-cost evidence, ranking, context/tool facts, last-observed/last-success timestamps and the current exclusion reason.
+
+F3.4 acceptance keeps `strict_zero_cost` as a hard boundary. A 429, provider outage or removed model may switch cross-provider only to another already-routable strict-free candidate. Paid or cost-unproven routes are rejected even when they are otherwise healthy; transient failures wait for their known cooldown when no safe route remains.

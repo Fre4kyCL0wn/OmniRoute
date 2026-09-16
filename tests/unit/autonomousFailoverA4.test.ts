@@ -520,7 +520,9 @@ test("A2/A3 reuse: real cohere/north-mini-code:free evidence flows end-to-end in
     connectionActive: true,
     policyMode: "strict_zero_cost",
   });
-  assert.equal(activation.strictZeroCostCandidate, false);
+  // F3.3D+: OpenRouter :free plus complete all-zero provider pricing is a
+  // route-level proof, so account-wide billing capability no longer blocks it.
+  assert.equal(activation.strictZeroCostCandidate, true);
 
   const candidate = candidateFromResolvedObservation({
     providerId: "openrouter",
@@ -532,7 +534,7 @@ test("A2/A3 reuse: real cohere/north-mini-code:free evidence flows end-to-end in
     alreadyRoutable: false,
   });
   assert.equal(candidate.activationState, "READY_BUT_NOT_ACTIVATED");
-  assert.equal(candidate.zeroCostUnsafeReason, "connection-safety-unknown");
+  assert.equal(candidate.zeroCostUnsafeReason, undefined);
 
   const result = evaluateFailoverDecision(
     baseInput({
@@ -541,10 +543,10 @@ test("A2/A3 reuse: real cohere/north-mini-code:free evidence flows end-to-end in
       policyMode: "strict_zero_cost",
     })
   );
-  // Blocked before even reaching the cost gate: it is not yet activated, and
-  // A4 never bypasses A3 to switch to a non-activated model.
-  assert.equal(result.decision, "NO_SAFE_ROUTE");
-  assert.equal(result.candidatesConsidered[0].reason, "ACCOUNT_SAFETY_UNKNOWN");
+  // The route is economically safe but not yet routable. A4 must surface the
+  // activation handoff rather than switching early or rejecting it as paid.
+  assert.equal(result.decision, "ACTIVATION_REQUIRED");
+  assert.equal(result.candidatesConsidered[0].reason, "ELIGIBLE");
 });
 
 test("A2/A3 reuse: a forced ActivationApprovalRecord never lets a KNOWN_INCOMPATIBLE model become a failover candidate", () => {

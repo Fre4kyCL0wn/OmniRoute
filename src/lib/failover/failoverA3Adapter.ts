@@ -68,8 +68,9 @@ export function candidateFromResolvedObservation(input: {
     runtimeState: input.runtimeState,
     activationState: activationStateFor(resolved, activation, input.alreadyRoutable),
     strictZeroCostSafe: activation.strictZeroCostCandidate,
-    zeroCostUnsafeReason:
-      resolved.evidence.strictZeroCostReason === "connection-safety-unknown"
+    zeroCostUnsafeReason: activation.strictZeroCostCandidate
+      ? undefined
+      : resolved.evidence.strictZeroCostReason === "connection-safety-unknown"
         ? "connection-safety-unknown"
         : "other",
     requirementsMatch: input.requirementsMatch,
