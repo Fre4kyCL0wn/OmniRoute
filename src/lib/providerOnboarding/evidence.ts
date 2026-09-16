@@ -39,6 +39,8 @@ export interface ObservedModelEvidence {
   catalogZeroPrice: boolean | null;
   /** Strong route-level proof that all provider-published price dimensions are zero. */
   completeRouteZeroCost: boolean | null;
+  /** Route is credentialless via a curated unattended no-auth provider. */
+  keylessZeroCost: boolean;
   /** Whether verifiedFree came from the curated catalog, live catalog pricing, or remains unknown. */
   freeEvidenceSource:
     "curated-free-catalog" | "provider-catalog-zero-price" | "curated-noauth-provider" | null;
@@ -98,9 +100,9 @@ function observedToolCalling(record: ProviderObservationRecord | null | undefine
 /**
  * Cost-only gate for active compatibility probes. It deliberately ignores
  * capability/Claude verdicts because the probe exists to establish those.
- * Provider traffic is allowed only when the exact live route is 0/0 priced,
- * or the curated recurring-free model has both a hard stop and a connection
- * that cannot spill into paid overage.
+ * Provider traffic is allowed only when the route is provably zero-cost: a
+ * curated keyless provider, an exact live 0/0 route, or a recurring-free model
+ * with both a hard stop and a connection that cannot spill into paid overage.
  */
 export function isToolRoundTripProbePlausible(
   record: ProviderObservationRecord,
@@ -128,6 +130,7 @@ export function compatibilityProbePriority(record: ProviderObservationRecord): n
 }
 
 export function isZeroCostSafeForCompatibilityProbe(evidence: ObservedModelEvidence): boolean {
+  if (evidence.keylessZeroCost === true) return true;
   if (evidence.catalogZeroPrice === true) return true;
   return (
     evidence.verifiedFree === true &&
@@ -206,6 +209,7 @@ export function resolveObservedModelEvidence(
     verifiedFree,
     catalogZeroPrice,
     completeRouteZeroCost,
+    keylessZeroCost,
     freeEvidenceSource,
     freeType,
     hardStopGuaranteed,

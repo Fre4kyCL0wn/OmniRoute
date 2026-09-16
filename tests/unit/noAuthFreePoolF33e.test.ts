@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 
 import { SYNTHETIC_NOAUTH_CONNECTION_ID } from "../../open-sse/services/autoCombo/resilienceCandidateFilter.ts";
 import { isAutoComboNoAuthProvider } from "../../open-sse/services/autoCombo/noAuthAutoPolicy.ts";
-import { resolveObservedModelEvidence } from "../../src/lib/providerOnboarding/evidence.ts";
+import {
+  isZeroCostSafeForCompatibilityProbe,
+  resolveObservedModelEvidence,
+} from "../../src/lib/providerOnboarding/evidence.ts";
 import { refreshNoAuthProviderObservations } from "../../src/lib/providerOnboarding/noAuthObservation.ts";
 import type {
   ProviderObservationRecord,
@@ -75,6 +78,25 @@ test("F3.3E: synthetic OpenCode route is zero-cost after a real compatibility PA
   assert.equal(evidence.connectionSafeForZeroCost, true);
   assert.equal(evidence.strictZeroCostEligible, true);
   assert.equal(evidence.strictZeroCostReason, "eligible-keyless");
+});
+
+test("F3.3E: keyless OpenCode is safe to probe before compatibility is known", () => {
+  const evidence = resolveObservedModelEvidence(
+    MODEL,
+    {
+      provider: "opencode",
+      authType: null,
+      connectionId: SYNTHETIC_NOAUTH_CONNECTION_ID,
+      providerSpecificData: null,
+    },
+    true,
+    record(),
+    null,
+    Date.parse(NOW)
+  );
+  assert.equal(evidence.keylessZeroCost, true);
+  assert.equal(evidence.claudeCodeEligible, null);
+  assert.equal(isZeroCostSafeForCompatibilityProbe(evidence), true);
 });
 
 test("F3.3E: public OpenCode catalog refresh persists observation only", async () => {
