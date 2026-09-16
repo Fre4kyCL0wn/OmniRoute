@@ -69,6 +69,7 @@ import {
   isToolRoundTripProbePlausible,
   isZeroCostSafeForCompatibilityProbe,
 } from "../providerOnboarding/evidence";
+import { runtimeAllowsCompatibilityProbe } from "../providerOnboarding/compatibilityProbeRuntimeGate";
 import { candidateFromResolvedObservation } from "./failoverA3Adapter";
 import type { FailoverCandidate } from "./failoverDecision";
 import { buildSafeCandidateSet, type CandidateDisposition } from "./jarvisSafeCandidateSet";
@@ -901,6 +902,7 @@ export function runShadowManagedComboPipeline(
       const compatibilityProbeEligible =
         connection.isActive === true &&
         resolved.record.currentlyObserved === true &&
+        runtimeAllowsCompatibilityProbe(runtimeState, input.now) &&
         resolved.evidence.claudeCodeEligible === null &&
         resolved.evidence.knownProtocolConflict !== true &&
         !evidenceFresh &&
