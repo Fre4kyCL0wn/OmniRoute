@@ -33,6 +33,9 @@ import {
 import { commonChatGptWebRetirementResponse } from "@/lib/providers/chatgptWebRetirementResponse";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
+import { getCompatibilityProbeContext } from "@/shared/utils/probeOrigin";
+import { getProviderObservationInventory } from "@/lib/db/providerObservedModels";
+import { isObservedCompatibilityProbeModel } from "@/lib/providerOnboarding/compatibilityProbeCatalogGate";
 
 export { parseModel, stripContextWindowSuffix };
 
@@ -469,13 +472,24 @@ export async function getModelInfo(modelStr) {
     const { modelId, metadata, available } = await lookupModelMeta(providerId, requestedModelId);
 
     if (!available) {
-      return {
-        provider: null,
-        model: requestedModelId,
-        extendedContext: info.extendedContext,
-        errorType: "model_not_found",
-        errorMessage: `Model '${requestedModelId}' is not available in the active live catalog for provider '${providerId}'.`,
-      };
+      const compatibilityContext = getCompatibilityProbeContext();
+      const observedProbeAllowed = isObservedCompatibilityProbeModel({
+        context: compatibilityContext,
+        providerId,
+        providerModelId: requestedModelId,
+        inventory: compatibilityContext
+          ? getProviderObservationInventory(compatibilityContext.connectionId)
+          : null,
+      });
+      if (!observedProbeAllowed) {
+        return {
+          provider: null,
+          model: requestedModelId,
+          extendedContext: info.extendedContext,
+          errorType: "model_not_found",
+          errorMessage: `Model '${requestedModelId}' is not available in the active live catalog for provider '${providerId}'.`,
+        };
+      }
     }
 
     const resolvedInfo = modelId !== info.model ? { ...info, model: modelId } : info;

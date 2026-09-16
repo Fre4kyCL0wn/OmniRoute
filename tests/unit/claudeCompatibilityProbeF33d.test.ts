@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { runClaudeCompatibilityProbe } from "../../src/lib/providerOnboarding/claudeCompatibilityProbe.ts";
+import { getCompatibilityProbeContext, runAsProbe } from "../../src/shared/utils/probeOrigin.ts";
 
 const base = {
   providerId: "openrouter",
@@ -23,6 +24,11 @@ test("F3.3D probe PASS requires tool_use plus tool_result continuation", async (
   const result = await runClaudeCompatibilityProbe(base, {
     pickApiKey: async () => "internal-test-key",
     postMessages: async (request) => {
+      assert.deepEqual(getCompatibilityProbeContext(), {
+        providerId: "openrouter",
+        connectionId: "conn-or",
+        providerModelId: "vendor/free-model:free",
+      });
       seen.push(await request.json());
       call++;
       if (call === 1) {
@@ -87,4 +93,11 @@ test("F3.3D explicit tool-protocol 400 is incompatible but generic 400 stays tra
   });
   assert.equal(generic.evidence.state, "TRANSIENT_FAILURE");
   assert.equal(generic.evidence.failureClass, "anthropic_translation");
+});
+
+test("F3.3D generic probe context cannot impersonate a compatibility probe", async () => {
+  await runAsProbe(async () => {
+    assert.equal(getCompatibilityProbeContext(), null);
+  });
+  assert.equal(getCompatibilityProbeContext(), null);
 });

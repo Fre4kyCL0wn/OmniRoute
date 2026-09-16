@@ -8,7 +8,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { runAsProbe } from "@/shared/utils/probeOrigin";
+import { runAsCompatibilityProbe } from "@/shared/utils/probeOrigin";
 import {
   buildCompatibilityEvidence,
   type ClaudeCodeCompatibilityFailureClass,
@@ -60,7 +60,12 @@ async function postWithTimeout(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await runAsProbe(() =>
+    const model = typeof body.model === "string" ? body.model : "";
+    const slash = model.indexOf("/");
+    const providerId = slash > 0 ? model.slice(0, slash) : "";
+    const providerModelId = slash > 0 ? model.slice(slash + 1) : "";
+    const connectionId = headers["X-OmniRoute-Connection"] ?? "";
+    return await runAsCompatibilityProbe({ providerId, connectionId, providerModelId }, () =>
       postMessages(
         new Request("http://omniroute.internal/v1/messages", {
           method: "POST",

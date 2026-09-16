@@ -20,10 +20,32 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
-const probeContext = new AsyncLocalStorage<{ probe: true }>();
+export interface CompatibilityProbeContext {
+  providerId: string;
+  connectionId: string;
+  providerModelId: string;
+}
+
+type ProbeContextStore = {
+  probe: true;
+  compatibility?: CompatibilityProbeContext;
+};
+
+const probeContext = new AsyncLocalStorage<ProbeContextStore>();
 
 export function runAsProbe<T>(fn: () => Promise<T>): Promise<T> {
   return probeContext.run({ probe: true }, fn);
+}
+
+export function runAsCompatibilityProbe<T>(
+  compatibility: CompatibilityProbeContext,
+  fn: () => Promise<T>
+): Promise<T> {
+  return probeContext.run({ probe: true, compatibility }, fn);
+}
+
+export function getCompatibilityProbeContext(): CompatibilityProbeContext | null {
+  return probeContext.getStore()?.compatibility ?? null;
 }
 
 export function isProbeContext(): boolean {
