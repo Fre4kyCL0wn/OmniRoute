@@ -1,5 +1,4 @@
 import { getDbInstance } from "@/lib/db/core";
-import { getDbInstance } from "@/lib/db/core";
 import { getPricingForModel } from "@/lib/db/settings";
 import { computeCostFromPricing } from "@/lib/usage/costCalculator";
 import { classifyConnectionBilling } from "./connectionBilling";
