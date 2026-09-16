@@ -151,3 +151,88 @@ test("F3.3D: missing supported-parameter metadata does not falsely rule out a pr
   );
   assert.equal(isToolRoundTripProbePlausible(unknown, evidence), true);
 });
+
+test("F3.3D: OpenRouter :free with complete all-zero pricing can bypass account billing capability", () => {
+  const paidCapableConnection = {
+    ...safeConnection,
+    providerSpecificData: {
+      billingEvidence: { billingLinked: true, origin: "provider-observed", observedAt: NOW },
+    },
+  };
+  const evidence = resolveObservedModelEvidence(
+    "vendor/new-free-model:free",
+    paidCapableConnection,
+    true,
+    record({ pricingDimensions: { prompt: 0, completion: 0 } }),
+    {
+      schemaVersion: 1,
+      providerId: "openrouter",
+      connectionId: "conn-openrouter",
+      providerModelId: "vendor/new-free-model:free",
+      canonicalModelId: "openrouter/vendor/new-free-model:free",
+      state: "PASS",
+      source: "claude-v1-messages-tool-roundtrip",
+      checkedAt: NOW,
+      expiresAt: "2026-09-22T20:00:00.000Z",
+      latencyMs: 100,
+      failureClass: null,
+    },
+    Date.parse(NOW)
+  );
+  assert.equal(evidence.connectionSafeForZeroCost, false);
+  assert.equal(evidence.catalogZeroPrice, true);
+  assert.equal(evidence.completeRouteZeroCost, true);
+  assert.equal(evidence.strictZeroCostEligible, true);
+  assert.equal(evidence.strictZeroCostReason, "eligible-complete-route-zero-cost");
+});
+
+test("F3.3D: extra non-zero or unknown pricing dimension blocks complete route zero-cost proof", () => {
+  for (const pricingDimensions of [
+    { prompt: 0, completion: 0, request: 0.001 },
+    { prompt: 0, completion: 0, request: null },
+  ]) {
+    const evidence = resolveObservedModelEvidence(
+      "vendor/new-free-model:free",
+      safeConnection,
+      true,
+      record({ pricingDimensions })
+    );
+    assert.notEqual(evidence.completeRouteZeroCost, true);
+  }
+});
+
+test("F3.3D: 0/0 without OpenRouter provider-defined :free route does not become complete route proof", () => {
+  const evidence = resolveObservedModelEvidence(
+    "vendor/zero-priced-preview",
+    safeConnection,
+    true,
+    record({
+      providerModelId: "vendor/zero-priced-preview",
+      canonicalModelId: "openrouter/vendor/zero-priced-preview",
+      pricingDimensions: { prompt: 0, completion: 0 },
+    })
+  );
+  assert.equal(evidence.catalogZeroPrice, true);
+  assert.equal(evidence.completeRouteZeroCost, null);
+});
+
+test("F3.3D: provider catalog normalization preserves every published pricing dimension", async () => {
+  const { normalizeObservedModels } = await import("../../src/lib/providerOnboarding/catalog.ts");
+  const [observed] = normalizeObservedModels(
+    "openrouter",
+    "conn-openrouter",
+    [
+      {
+        id: "vendor/all-zero:free",
+        pricing: { prompt: "0", completion: 0, request: "0", image: "0.000001" },
+      },
+    ],
+    { source: "fixture", observedAt: NOW }
+  );
+  assert.deepEqual(observed.pricingDimensions, {
+    prompt: 0,
+    completion: 0,
+    request: 0,
+    image: 0.000001,
+  });
+});

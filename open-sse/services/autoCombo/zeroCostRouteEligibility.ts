@@ -41,6 +41,8 @@ export interface ZeroCostRouteFacts {
    * null means the provider did not expose enough pricing evidence.
    */
   exactZeroPrice: boolean | null;
+  /** Strong route-level proof that every provider-published price dimension is zero. */
+  completeRouteZeroCost?: boolean | null;
   /** MODEL layer: `FreeModelBudget.hardStopGuaranteed` for this exact curated catalog entry. */
   hardStopGuaranteed: boolean | null;
   /** CONNECTION layer. */
@@ -50,6 +52,7 @@ export interface ZeroCostRouteFacts {
 export type ZeroCostRouteReason =
   | "eligible-local"
   | "eligible-verified-free"
+  | "eligible-complete-route-zero-cost"
   | "not-executable"
   | "harness-incompatible"
   | "connection-unavailable"
@@ -80,12 +83,13 @@ function capabilityRejection(facts: ZeroCostRouteFacts): ZeroCostRouteReason | n
 function externalCostRejection(facts: ZeroCostRouteFacts): ZeroCostRouteReason | null {
   if (facts.verifiedFree === false) return "model-not-recurring-free";
   if (facts.verifiedFree !== true) return "model-free-unknown";
+  // A complete route-level proof is stronger than account billing state: even a
+  // paid-capable account cannot incur incremental cost on this exact route.
+  if (facts.completeRouteZeroCost === true) return null;
   if (facts.connectionSafeForZeroCost === false) return "connection-unsafe";
   if (facts.connectionSafeForZeroCost !== true) return "connection-safety-unknown";
-  // Two independent strong economic proofs are accepted:
-  //  1. curated terms guarantee a hard stop when the free allowance ends; or
-  //  2. the live provider catalog explicitly prices both input and output at 0.
-  // Missing/partial pricing does not weaken the existing hard-stop requirement.
+  // Without complete route proof, retain the historical account-safety gate.
+  // A curated hard-stop or exact token 0/0 price may then prove no spillover.
   if (facts.hardStopGuaranteed !== true && facts.exactZeroPrice !== true) return "no-hard-stop";
   return null;
 }
@@ -101,5 +105,11 @@ export function evaluateZeroCostRoute(facts: ZeroCostRouteFacts): ZeroCostRouteV
   if (facts.localZeroCost === true) return { eligible: true, reason: "eligible-local" };
   const cost = externalCostRejection(facts);
   if (cost) return { eligible: false, reason: cost };
-  return { eligible: true, reason: "eligible-verified-free" };
+  return {
+    eligible: true,
+    reason:
+      facts.completeRouteZeroCost === true
+        ? "eligible-complete-route-zero-cost"
+        : "eligible-verified-free",
+  };
 }

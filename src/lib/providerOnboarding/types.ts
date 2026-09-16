@@ -23,6 +23,8 @@ export interface ProviderModelObservation {
   maxOutput: number | null;
   pricingInput: number | null;
   pricingOutput: number | null;
+  /** Every pricing dimension explicitly published by the provider catalog. Old inventories may omit it. */
+  pricingDimensions?: Record<string, number | null> | null;
   supportedParameters: string[] | null;
   /** Only an explicit upstream boolean. Observation metadata, never capability evidence. */
   toolCallingObserved: boolean | null;

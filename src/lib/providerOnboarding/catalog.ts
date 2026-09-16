@@ -57,6 +57,15 @@ function stringList(value: unknown): string[] | null {
     : null;
 }
 
+function pricingDimensions(
+  value: Record<string, unknown> | null
+): Record<string, number | null> | null {
+  if (!value) return null;
+  const entries = Object.entries(value);
+  if (entries.length === 0) return {};
+  return Object.fromEntries(entries.map(([key, raw]) => [key, parsePrice(raw)]));
+}
+
 /**
  * Normalize parsed catalog entries into observations. Entries without an id
  * are dropped; duplicate ids keep the first occurrence.
@@ -103,6 +112,7 @@ export function normalizeObservedModels(
       ),
       pricingInput: pricing ? parsePrice(pricing.prompt ?? pricing.input) : null,
       pricingOutput: pricing ? parsePrice(pricing.completion ?? pricing.output) : null,
+      pricingDimensions: pricingDimensions(pricing),
       supportedParameters: stringList(record.supported_parameters),
       toolCallingObserved: explicitBoolean(record.supports_tools, record.supportsTools),
       streamingObserved: explicitBoolean(record.supports_streaming, record.supportsStreaming),

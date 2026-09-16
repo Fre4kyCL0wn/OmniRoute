@@ -378,3 +378,29 @@ test("openrouter: free model evidence does not establish account safety", () => 
   assert.equal(resolveVerifiedFree("openrouter", "cohere/north-mini-code:free"), true);
   assert.equal(connection.safe, null);
 });
+
+test("complete route zero-cost proof may bypass paid-capable account state for that exact route", () => {
+  assert.deepEqual(
+    evaluateZeroCostRoute({
+      ...PROVEN,
+      connectionSafeForZeroCost: false,
+      hardStopGuaranteed: null,
+      exactZeroPrice: true,
+      completeRouteZeroCost: true,
+    }),
+    { eligible: true, reason: "eligible-complete-route-zero-cost" }
+  );
+});
+
+test("plain token 0/0 evidence does not bypass an unsafe account", () => {
+  assert.deepEqual(
+    evaluateZeroCostRoute({
+      ...PROVEN,
+      connectionSafeForZeroCost: false,
+      hardStopGuaranteed: null,
+      exactZeroPrice: true,
+      completeRouteZeroCost: null,
+    }),
+    { eligible: false, reason: "connection-unsafe" }
+  );
+});

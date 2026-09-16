@@ -21,6 +21,7 @@ import { evaluateZeroCostRoute } from "@omniroute/open-sse/services/autoCombo/ze
 import { produceCapabilities } from "@omniroute/open-sse/services/capabilityEligibility.ts";
 import type { ProviderObservationRecord } from "./types";
 import { compatibilityVerdict, type ProviderModelCompatibilityEvidence } from "./compatibility";
+import { resolveCompleteRouteZeroCost } from "./completeRouteZeroCost";
 
 export type UsageCostClass =
   "verified_free" | "free_tier" | "subscription_included" | "paid" | "unknown";
@@ -34,6 +35,8 @@ export interface ObservedModelEvidence {
   verifiedFree: boolean | null;
   /** Exact live provider-catalog pricing evidence. true only when both input and output are explicitly zero. */
   catalogZeroPrice: boolean | null;
+  /** Strong route-level proof that all provider-published price dimensions are zero. */
+  completeRouteZeroCost: boolean | null;
   /** Whether verifiedFree came from the curated catalog, live catalog pricing, or remains unknown. */
   freeEvidenceSource: "curated-free-catalog" | "provider-catalog-zero-price" | null;
   freeType: FreeModelFreeType | null;
@@ -160,6 +163,7 @@ export function resolveObservedModelEvidence(
   const budget = findBudgetEntry({ provider: providerId, model: providerModelId });
   const freeType = budget?.freeType ?? null;
   const catalogZeroPrice = catalogZeroPriceFor(record);
+  const completeRouteZeroCost = resolveCompleteRouteZeroCost(record);
   const verifiedFree = caps.verifiedFree ?? catalogZeroPrice;
   const freeEvidenceSource =
     caps.verifiedFree !== null
@@ -178,6 +182,7 @@ export function resolveObservedModelEvidence(
     localZeroCost: false,
     verifiedFree,
     exactZeroPrice: catalogZeroPrice,
+    completeRouteZeroCost,
     hardStopGuaranteed,
     connectionSafeForZeroCost: safety.safe,
   });
@@ -192,6 +197,7 @@ export function resolveObservedModelEvidence(
     supervisorEligible: caps.supervisorEligible,
     verifiedFree,
     catalogZeroPrice,
+    completeRouteZeroCost,
     freeEvidenceSource,
     freeType,
     hardStopGuaranteed,
