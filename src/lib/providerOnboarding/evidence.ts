@@ -172,7 +172,8 @@ export function resolveObservedModelEvidence(
   const completeRouteZeroCost = resolveCompleteRouteZeroCost(record);
   const keylessZeroCost =
     connection.connectionId === SYNTHETIC_NOAUTH_CONNECTION_ID &&
-    isAutoComboNoAuthProvider(providerId);
+    isAutoComboNoAuthProvider(providerId) &&
+    budget?.freeType === "keyless";
   const verifiedFree = keylessZeroCost ? true : (caps.verifiedFree ?? catalogZeroPrice);
   const freeEvidenceSource = keylessZeroCost
     ? "curated-noauth-provider"

@@ -14,7 +14,7 @@ import type {
 } from "../../src/lib/providerOnboarding/types.ts";
 
 const NOW = "2026-09-16T10:00:00.000Z";
-const MODEL = "north-mini-code-free";
+const MODEL = "deepseek-v4-flash-free";
 
 function record(): ProviderObservationRecord {
   return {
@@ -97,6 +97,27 @@ test("F3.3E: keyless OpenCode is safe to probe before compatibility is known", (
   assert.equal(evidence.keylessZeroCost, true);
   assert.equal(evidence.claudeCodeEligible, null);
   assert.equal(isZeroCostSafeForCompatibilityProbe(evidence), true);
+});
+
+test("F3.3E: public catalog models are not keyless unless curated as keyless free", () => {
+  const paidLike = record();
+  paidLike.providerModelId = "kimi-k2.7-code";
+  paidLike.canonicalModelId = "opencode/kimi-k2.7-code";
+  const evidence = resolveObservedModelEvidence(
+    paidLike.providerModelId,
+    {
+      provider: "opencode",
+      authType: null,
+      connectionId: SYNTHETIC_NOAUTH_CONNECTION_ID,
+      providerSpecificData: null,
+    },
+    true,
+    paidLike,
+    null,
+    Date.parse(NOW)
+  );
+  assert.equal(evidence.keylessZeroCost, false);
+  assert.equal(isZeroCostSafeForCompatibilityProbe(evidence), false);
 });
 
 test("F3.3E: public OpenCode catalog refresh persists observation only", async () => {
