@@ -71,6 +71,11 @@ import {
   isZeroCostSafeForCompatibilityProbe,
 } from "../providerOnboarding/evidence";
 import { runtimeAllowsCompatibilityProbe } from "../providerOnboarding/compatibilityProbeRuntimeGate";
+import {
+  orderSafeCandidatesWithProviderDiversity,
+  scoreManagedFreeCandidate,
+} from "./managedFreeCandidateRanking";
+import { deriveManagedFreeLifecycle, type ManagedFreeLifecycleState } from "./managedFreeLifecycle";
 import { candidateFromResolvedObservation } from "./failoverA3Adapter";
 import type { FailoverCandidate } from "./failoverDecision";
 import { buildSafeCandidateSet, type CandidateDisposition } from "./jarvisSafeCandidateSet";
@@ -768,6 +773,21 @@ export interface PipelineCandidateDiagnostic {
   compatibilityProbePriority?: number;
   /** Any PASS/INCOMPATIBLE/TRANSIENT result suppresses re-probing until its TTL expires. */
   compatibilityEvidenceFresh?: boolean;
+  rankScore?: number;
+  rankReasons?: readonly string[];
+  lifecycleState?: ManagedFreeLifecycleState;
+  lastObservedAt?: string;
+  compatibilityCheckedAt?: string | null;
+  lastSuccessAt?: number | null;
+  costEvidence?: string | null;
+  strictZeroCostReason?: string;
+  contextWindow?: number | null;
+  toolCalling?: boolean | null;
+  compatibilityState?: string | null;
+  providerHealth?: ProviderRuntimeState["providerHealth"];
+  accountState?: ProviderRuntimeState["accountState"];
+  quotaState?: ProviderRuntimeState["quotaState"];
+  cooldownUntil?: number | null;
   disposition: CandidateDisposition;
 }
 
@@ -849,6 +869,8 @@ export function runShadowManagedComboPipeline(
     string,
     { eligible: boolean; evidenceFresh: boolean; priority: number }
   >();
+  const rankByCandidateKey = new Map<string, { score: number; reasons: string[] }>();
+  const lifecycleByCandidateKey = new Map<string, ManagedFreeLifecycleState>();
 
   for (const connection of input.connections) {
     const billable: BillableConnection & { isActive: boolean } = {
@@ -924,13 +946,35 @@ export function runShadowManagedComboPipeline(
         alreadyRoutable: alreadyRoutable(resolved.record.canonicalModelId, connection.connectionId),
       });
       candidates.push(candidate);
-      compatibilityProbeByCandidateKey.set(
-        `${candidate.providerId}::${candidate.connectionId}::${candidate.routeId}`,
-        {
-          eligible: compatibilityProbeEligible,
-          evidenceFresh,
-          priority: compatibilityProbePriority(resolved.record),
-        }
+      const candidateKey = `${candidate.providerId}::${candidate.connectionId}::${candidate.routeId}`;
+      compatibilityProbeByCandidateKey.set(candidateKey, {
+        eligible: compatibilityProbeEligible,
+        evidenceFresh,
+        priority: compatibilityProbePriority(resolved.record),
+      });
+      lifecycleByCandidateKey.set(
+        candidateKey,
+        deriveManagedFreeLifecycle({
+          record: resolved.record,
+          compatibility: compatibilityEvidence,
+          runtimeState,
+          nowMs: input.now,
+        })
+      );
+      rankByCandidateKey.set(
+        candidateKey,
+        scoreManagedFreeCandidate({
+          routeId: candidate.routeId,
+          providerId: candidate.providerId,
+          connectionId: candidate.connectionId,
+          providerModelId: resolved.record.providerModelId,
+          toolCalling: resolved.evidence.toolCalling,
+          contextWindow: resolved.record.contextWindow,
+          supportedParameters: resolved.record.supportedParameters,
+          compatibilityLatencyMs: compatibilityEvidence?.latencyMs ?? null,
+          runtimeState,
+          nowMs: input.now,
+        })
       );
       candidatesBuilt++;
     }
@@ -946,6 +990,14 @@ export function runShadowManagedComboPipeline(
   }
 
   const safeSet = buildSafeCandidateSet(candidates, { now: input.now });
+  const scoreByKey = new Map(
+    [...rankByCandidateKey.entries()].map(([key, rank]) => [key, rank.score] as const)
+  );
+  const rankedSafeSet = {
+    ...safeSet,
+    general: orderSafeCandidatesWithProviderDiversity(safeSet.general, scoreByKey),
+    strictZeroCost: orderSafeCandidatesWithProviderDiversity(safeSet.strictZeroCost, scoreByKey),
+  };
   const candidateDiagnostics: PipelineCandidateDiagnostic[] = candidates.map((candidate) => {
     const key = `${candidate.providerId}::${candidate.connectionId}::${candidate.routeId}`;
     const probe = compatibilityProbeByCandidateKey.get(key);
@@ -958,7 +1010,94 @@ export function runShadowManagedComboPipeline(
       compatibilityProbeEligible: probe?.eligible ?? false,
       compatibilityProbePriority: probe?.priority ?? 0,
       compatibilityEvidenceFresh: probe?.evidenceFresh ?? false,
-      disposition: safeSet.dispositionByKey.get(key) ?? {
+      rankScore: rankByCandidateKey.get(key)?.score ?? 0,
+      rankReasons: rankByCandidateKey.get(key)?.reasons ?? [],
+      lifecycleState: lifecycleByCandidateKey.get(key),
+      lastObservedAt: (() => {
+        for (const connection of input.connections) {
+          if (connection.connectionId !== candidate.connectionId) continue;
+          const inventory = input.observationInventoryByConnection?.get(connection.connectionId);
+          const record = inventory?.models.find((m) => m.canonicalModelId === candidate.routeId);
+          if (record) return record.lastObservedAt;
+        }
+        return undefined;
+      })(),
+      compatibilityCheckedAt: (() => {
+        const inventory = input.compatibilityInventoryByConnection?.get(candidate.connectionId);
+        const prefix = `${candidate.providerId}/`;
+        const modelId = candidate.routeId.startsWith(prefix)
+          ? candidate.routeId.slice(prefix.length)
+          : candidate.routeId;
+        return inventory?.models?.[modelId]?.checkedAt ?? null;
+      })(),
+      lastSuccessAt: candidate.runtimeState.lastSuccessAt,
+      costEvidence: (() => {
+        const inventory = input.observationInventoryByConnection?.get(candidate.connectionId);
+        const record = inventory?.models.find((m) => m.canonicalModelId === candidate.routeId);
+        if (!record) return null;
+        const connection = input.connections.find((c) => c.connectionId === candidate.connectionId);
+        if (!connection) return null;
+        return (
+          resolveProviderObservations({
+            inventory: { ...inventory, models: [record] },
+            connection: {
+              provider: connection.provider,
+              authType: connection.authType,
+              connectionId: connection.connectionId,
+              providerSpecificData: connection.providerSpecificData,
+              isActive: connection.isActive,
+            },
+            compatibilityInventory: input.compatibilityInventoryByConnection?.get(
+              candidate.connectionId
+            ),
+            nowMs: input.now,
+          }).models[0]?.evidence.freeEvidenceSource ?? null
+        );
+      })(),
+      strictZeroCostReason: (() => {
+        const inventory = input.observationInventoryByConnection?.get(candidate.connectionId);
+        const record = inventory?.models.find((m) => m.canonicalModelId === candidate.routeId);
+        if (!record) return "unknown";
+        const connection = input.connections.find((c) => c.connectionId === candidate.connectionId);
+        if (!connection) return "unknown";
+        return (
+          resolveProviderObservations({
+            inventory: { ...inventory, models: [record] },
+            connection: {
+              provider: connection.provider,
+              authType: connection.authType,
+              connectionId: connection.connectionId,
+              providerSpecificData: connection.providerSpecificData,
+              isActive: connection.isActive,
+            },
+            compatibilityInventory: input.compatibilityInventoryByConnection?.get(
+              candidate.connectionId
+            ),
+            nowMs: input.now,
+          }).models[0]?.evidence.strictZeroCostReason ?? "unknown"
+        );
+      })(),
+      contextWindow: (() => {
+        const inventory = input.observationInventoryByConnection?.get(candidate.connectionId);
+        return (
+          inventory?.models.find((m) => m.canonicalModelId === candidate.routeId)?.contextWindow ??
+          null
+        );
+      })(),
+      toolCalling: candidate.runtimeState.capabilities.genericToolEligible,
+      providerHealth: candidate.runtimeState.providerHealth,
+      accountState: candidate.runtimeState.accountState,
+      quotaState: candidate.runtimeState.quotaState,
+      cooldownUntil: candidate.runtimeState.cooldownUntil,
+      compatibilityState: (() => {
+        const inventory = input.compatibilityInventoryByConnection?.get(candidate.connectionId);
+        const prefix = `${candidate.providerId}/`;
+        const modelId = candidate.routeId.startsWith(prefix)
+          ? candidate.routeId.slice(prefix.length)
+          : candidate.routeId;
+        return inventory?.models?.[modelId]?.state ?? null;
+      })(),
+      disposition: rankedSafeSet.dispositionByKey.get(key) ?? {
         kind: "JARVIS_REJECTED",
         reason: "NO_SAFE_ROUTE",
       },
@@ -966,7 +1105,7 @@ export function runShadowManagedComboPipeline(
   });
   const poolKind = input.policyMode === "strict_zero_cost" ? "strictZeroCost" : "general";
   const recommendation = recommendStrategy({
-    safeSet,
+    safeSet: rankedSafeSet,
     poolKind,
     requestClass: input.requestClass,
     telemetry: input.telemetry,
@@ -976,7 +1115,7 @@ export function runShadowManagedComboPipeline(
   const desired = buildManagedComboDesiredState({
     logicalId,
     name: physicalName,
-    safeSet,
+    safeSet: rankedSafeSet,
     recommendation,
     policyMode: input.policyMode,
   });

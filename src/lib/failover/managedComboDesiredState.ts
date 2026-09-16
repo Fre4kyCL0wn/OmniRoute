@@ -249,9 +249,10 @@ export function buildManagedComboDesiredState(
     // else: persistent removal — simply omitted from `members` (no action needed here).
   }
 
-  const members = [...currentMembers, ...transientlySuppressed].sort((a, b) =>
-    memberKey(a).localeCompare(memberKey(b))
-  );
+  // Preserve the caller's deterministic quality/diversity order. The evidence
+  // fingerprint remains order-independent, so routing priority can be meaningful
+  // without turning member-order churn into false drift.
+  const members = [...currentMembers, ...transientlySuppressed];
 
   const config: Record<string, unknown> =
     recommendation.strategy === "auto"

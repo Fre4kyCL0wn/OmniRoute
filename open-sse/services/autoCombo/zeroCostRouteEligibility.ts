@@ -33,6 +33,8 @@ export interface ZeroCostRouteFacts {
   quotaExhausted: boolean | null;
   /** Genuine self-hosted route (`isSelfHostedChatProvider`): no external provider bill exists. */
   localZeroCost: boolean | null;
+  /** Synthetic no-auth route: no billable credential exists by construction. */
+  keylessZeroCost?: boolean | null;
   /** MODEL layer: recurring-free proof from curated or live provider-catalog evidence. */
   verifiedFree: boolean | null;
   /**
@@ -51,6 +53,7 @@ export interface ZeroCostRouteFacts {
 
 export type ZeroCostRouteReason =
   | "eligible-local"
+  | "eligible-keyless"
   | "eligible-verified-free"
   | "eligible-complete-route-zero-cost"
   | "not-executable"
@@ -103,6 +106,7 @@ export function evaluateZeroCostRoute(facts: ZeroCostRouteFacts): ZeroCostRouteV
   const capability = capabilityRejection(facts);
   if (capability) return { eligible: false, reason: capability };
   if (facts.localZeroCost === true) return { eligible: true, reason: "eligible-local" };
+  if (facts.keylessZeroCost === true) return { eligible: true, reason: "eligible-keyless" };
   const cost = externalCostRejection(facts);
   if (cost) return { eligible: false, reason: cost };
   return {

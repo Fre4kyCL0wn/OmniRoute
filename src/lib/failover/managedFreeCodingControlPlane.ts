@@ -15,6 +15,8 @@ import {
   SYNCED_AVAILABLE_MODELS_MALFORMED,
 } from "@/lib/db/models";
 import { getProviderRuntimeState } from "@omniroute/open-sse/services/providerRuntimeState.ts";
+import { AUTO_COMBO_NOAUTH_ALLOWLIST } from "@omniroute/open-sse/services/autoCombo/noAuthAutoPolicy.ts";
+import { SYNTHETIC_NOAUTH_CONNECTION_ID } from "@omniroute/open-sse/services/autoCombo/resilienceCandidateFilter.ts";
 import { parseConnectionBillingEvidence } from "@omniroute/open-sse/services/autoCombo/connectionBilling.ts";
 import {
   refreshConnectionObservations,
@@ -28,6 +30,7 @@ import {
 } from "./shadowControlPlaneAdapter";
 import type { ProviderObservationInventory } from "../providerOnboarding/types";
 import type { ProviderModelCompatibilityInventory } from "../providerOnboarding/compatibility";
+import { refreshNoAuthProviderObservations } from "../providerOnboarding/noAuthObservation";
 import { applyManagedComboReconciliation, type ManagedComboApplyResult } from "./managedComboApply";
 import {
   observeConnectionBillingSafety,
@@ -101,6 +104,17 @@ function toConnectionSnapshot(row: ConnectionRow): ShadowConnectionSnapshot | nu
   };
 }
 
+function syntheticNoAuthConnections(): ShadowConnectionSnapshot[] {
+  return [...AUTO_COMBO_NOAUTH_ALLOWLIST].map((provider) => ({
+    connectionId: SYNTHETIC_NOAUTH_CONNECTION_ID,
+    provider,
+    authType: null,
+    isActive: true,
+    testStatus: "active",
+    providerSpecificData: null,
+  }));
+}
+
 function toComboSnapshot(raw: Record<string, unknown>): ShadowComboSnapshot | null {
   if (typeof raw.id !== "string" || typeof raw.name !== "string") return null;
   return {
@@ -130,6 +144,15 @@ async function refreshEligibleConnections(
       if (index >= queue.length) return;
       const connection = queue[index];
       try {
+        if (connection.connectionId === SYNTHETIC_NOAUTH_CONNECTION_ID) {
+          const inventory = await refreshNoAuthProviderObservations(connection.provider);
+          results[index] = {
+            providerId: connection.provider,
+            connectionId: connection.connectionId,
+            status: inventory?.refreshStatus ?? "unsupported-provider",
+          };
+          continue;
+        }
         const result = await refreshConnectionObservations(connection.connectionId);
         results[index] = {
           providerId: connection.provider,
@@ -161,16 +184,22 @@ export async function buildManagedFreeCodingDryRun(
     "test_status",
     "provider_specific_data",
   ])) as ConnectionRow[];
-  const connections = rawConnections
-    .map(toConnectionSnapshot)
-    .filter((value): value is ShadowConnectionSnapshot => value !== null);
+  const connections = [
+    ...rawConnections
+      .map(toConnectionSnapshot)
+      .filter((value): value is ShadowConnectionSnapshot => value !== null),
+    ...syntheticNoAuthConnections(),
+  ];
 
   const [observationRefresh, billingObservation] = options.refreshObservations
     ? await Promise.all([
         refreshEligibleConnections(connections),
         Promise.all(
           connections
-            .filter((connection) => connection.isActive)
+            .filter(
+              (connection) =>
+                connection.isActive && connection.connectionId !== SYNTHETIC_NOAUTH_CONNECTION_ID
+            )
             .map((connection) => observeConnectionBillingSafety(connection))
         ),
       ])
@@ -274,6 +303,9 @@ export async function buildManagedFreeCodingDryRun(
     alreadyRoutableResolver: (canonicalModelId, connectionId) => {
       const provider = providerByConnection.get(connectionId);
       if (!provider) return false;
+      if (connectionId === SYNTHETIC_NOAUTH_CONNECTION_ID) {
+        return AUTO_COMBO_NOAUTH_ALLOWLIST.has(provider);
+      }
       const byConnection = syncedByProvider.get(provider);
       if (!byConnection || byConnection[SYNCED_AVAILABLE_MODELS_MALFORMED]) return false;
       const prefix = `${provider}/`;

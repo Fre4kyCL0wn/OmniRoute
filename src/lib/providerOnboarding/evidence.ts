@@ -22,6 +22,8 @@ import { produceCapabilities } from "@omniroute/open-sse/services/capabilityElig
 import type { ProviderObservationRecord } from "./types";
 import { compatibilityVerdict, type ProviderModelCompatibilityEvidence } from "./compatibility";
 import { resolveCompleteRouteZeroCost } from "./completeRouteZeroCost";
+import { SYNTHETIC_NOAUTH_CONNECTION_ID } from "@omniroute/open-sse/services/autoCombo/resilienceCandidateFilter.ts";
+import { isAutoComboNoAuthProvider } from "@omniroute/open-sse/services/autoCombo/noAuthAutoPolicy.ts";
 
 export type UsageCostClass =
   "verified_free" | "free_tier" | "subscription_included" | "paid" | "unknown";
@@ -38,7 +40,8 @@ export interface ObservedModelEvidence {
   /** Strong route-level proof that all provider-published price dimensions are zero. */
   completeRouteZeroCost: boolean | null;
   /** Whether verifiedFree came from the curated catalog, live catalog pricing, or remains unknown. */
-  freeEvidenceSource: "curated-free-catalog" | "provider-catalog-zero-price" | null;
+  freeEvidenceSource:
+    "curated-free-catalog" | "provider-catalog-zero-price" | "curated-noauth-provider" | null;
   freeType: FreeModelFreeType | null;
   hardStopGuaranteed: boolean | null;
   usageCostClass: UsageCostClass;
@@ -164,9 +167,13 @@ export function resolveObservedModelEvidence(
   const freeType = budget?.freeType ?? null;
   const catalogZeroPrice = catalogZeroPriceFor(record);
   const completeRouteZeroCost = resolveCompleteRouteZeroCost(record);
-  const verifiedFree = caps.verifiedFree ?? catalogZeroPrice;
-  const freeEvidenceSource =
-    caps.verifiedFree !== null
+  const keylessZeroCost =
+    connection.connectionId === SYNTHETIC_NOAUTH_CONNECTION_ID &&
+    isAutoComboNoAuthProvider(providerId);
+  const verifiedFree = keylessZeroCost ? true : (caps.verifiedFree ?? catalogZeroPrice);
+  const freeEvidenceSource = keylessZeroCost
+    ? "curated-noauth-provider"
+    : caps.verifiedFree !== null
       ? "curated-free-catalog"
       : catalogZeroPrice === true
         ? "provider-catalog-zero-price"
@@ -180,6 +187,7 @@ export function resolveObservedModelEvidence(
     unhealthy: null,
     quotaExhausted: null,
     localZeroCost: false,
+    keylessZeroCost,
     verifiedFree,
     exactZeroPrice: catalogZeroPrice,
     completeRouteZeroCost,
@@ -201,7 +209,9 @@ export function resolveObservedModelEvidence(
     freeEvidenceSource,
     freeType,
     hardStopGuaranteed,
-    usageCostClass: usageCostClassFor(connection, freeType, catalogZeroPrice),
+    usageCostClass: keylessZeroCost
+      ? "verified_free"
+      : usageCostClassFor(connection, freeType, catalogZeroPrice),
     connectionSafeForZeroCost: safety.safe,
     knownProtocolConflict: claudeCodeEligible === false,
     strictZeroCostEligible: route.eligible,

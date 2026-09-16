@@ -66,7 +66,9 @@ function statusFor(
 }
 
 function costStateFor(evidence: ObservedModelEvidence): CostObservationState {
-  if (evidence.usageCostClass === "verified_free") return "keyless";
+  if (evidence.usageCostClass === "verified_free") {
+    return evidence.freeEvidenceSource === "curated-noauth-provider" ? "keyless" : "recurring_free";
+  }
   if (evidence.usageCostClass === "free_tier") return "recurring_free";
   if (evidence.freeType === "one-time-initial") return "trial_only";
   if (evidence.usageCostClass === "subscription_included") return "subscription_included";
