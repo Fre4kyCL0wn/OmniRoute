@@ -61,6 +61,7 @@ import {
 } from "../providerOnboarding/onboarding";
 import type { ProviderObservationInventory } from "../providerOnboarding/types";
 import {
+  compatibilityConnectionProbeBackoffUntil,
   compatibilityEvidenceFresh,
   type ProviderModelCompatibilityInventory,
 } from "../providerOnboarding/compatibility";
@@ -861,13 +862,18 @@ export function runShadowManagedComboPipeline(
     const inventory =
       input.observationInventoryByConnection?.get(connection.connectionId) ??
       emptyInventory(connection.provider, connection.connectionId, "shadow-control-plane-adapter");
+    const compatibilityInventory = input.compatibilityInventoryByConnection?.get(
+      connection.connectionId
+    );
+    const connectionProbeBackoffUntil = compatibilityConnectionProbeBackoffUntil(
+      compatibilityInventory,
+      input.now
+    );
 
     const resolution = resolveProviderObservations({
       inventory,
       connection: billable,
-      compatibilityInventory: input.compatibilityInventoryByConnection?.get(
-        connection.connectionId
-      ),
+      compatibilityInventory,
       nowMs: input.now,
     });
 
@@ -895,14 +901,14 @@ export function runShadowManagedComboPipeline(
       // FailoverCandidate.
       if (!resolved.record.currentlyObserved) continue;
       const activation = gate.decisions[i];
-      const compatibilityEvidence = input.compatibilityInventoryByConnection?.get(
-        connection.connectionId
-      )?.models?.[resolved.record.providerModelId];
+      const compatibilityEvidence =
+        compatibilityInventory?.models?.[resolved.record.providerModelId];
       const evidenceFresh = compatibilityEvidenceFresh(compatibilityEvidence, input.now);
       const compatibilityProbeEligible =
         connection.isActive === true &&
         resolved.record.currentlyObserved === true &&
         runtimeAllowsCompatibilityProbe(runtimeState, input.now) &&
+        connectionProbeBackoffUntil === null &&
         resolved.evidence.claudeCodeEligible === null &&
         resolved.evidence.knownProtocolConflict !== true &&
         !evidenceFresh &&

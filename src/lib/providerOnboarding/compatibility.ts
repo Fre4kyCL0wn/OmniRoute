@@ -87,3 +87,28 @@ export function compatibilityVerdict(
   if (evidence.state === "INCOMPATIBLE") return false;
   return null;
 }
+
+/**
+ * Connection-wide probe backoff derived from persisted transient rate-limit
+ * evidence. A 429 observed while probing one model must suppress probing other
+ * models on the same credential until the transient evidence expires.
+ */
+export function compatibilityConnectionProbeBackoffUntil(
+  inventory: ProviderModelCompatibilityInventory | null | undefined,
+  nowMs: number
+): number | null {
+  if (!inventory || inventory.schemaVersion !== 1) return null;
+  let latestExpiry: number | null = null;
+  for (const evidence of Object.values(inventory.models ?? {})) {
+    if (
+      evidence.state !== "TRANSIENT_FAILURE" ||
+      evidence.failureClass !== "rate_limit" ||
+      !compatibilityEvidenceFresh(evidence, nowMs)
+    ) {
+      continue;
+    }
+    const expiry = Date.parse(evidence.expiresAt);
+    if (Number.isFinite(expiry)) latestExpiry = Math.max(latestExpiry ?? 0, expiry);
+  }
+  return latestExpiry;
+}
