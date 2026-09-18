@@ -12,6 +12,7 @@ import ProviderUtilizationTab from "./ProviderUtilizationTab";
 import RouteExplainabilityTab from "./RouteExplainabilityTab";
 import SearchAnalyticsTab from "./SearchAnalyticsTab";
 import DiversityScoreCard from "./components/DiversityScoreCard";
+import FreePoolObservatoryTab from "./FreePoolObservatoryTab";
 
 type AnalyticsTab =
   | "overview"
@@ -20,7 +21,8 @@ type AnalyticsTab =
   | "utilization"
   | "combo-health"
   | "cache-health"
-  | "route-trace";
+  | "route-trace"
+  | "free-pool";
 
 const ANALYTICS_TABS: Array<{
   id: AnalyticsTab;
@@ -45,6 +47,7 @@ const ANALYTICS_TABS: Array<{
     icon: "database",
   },
   { id: "route-trace", labelKey: "routeTrace", label: "Route Trace", icon: "alt_route" },
+  { id: "free-pool", labelKey: "freePool", label: "Free Pool", icon: "hub" },
 ];
 
 type AnalyticsTranslator = ((key: string, values?: Record<string, unknown>) => string) & {
@@ -62,7 +65,8 @@ function normalizeTab(tab: string | null): AnalyticsTab {
     tab === "search" ||
     tab === "utilization" ||
     tab === "combo-health" ||
-    tab === "cache-health"
+    tab === "cache-health" ||
+    tab === "free-pool"
   ) {
     return tab;
   }
@@ -138,6 +142,7 @@ function AnalyticsPageContent() {
         {activeTab === "utilization" ? <ProviderUtilizationTab /> : null}
         {activeTab === "combo-health" ? <ComboHealthTab /> : null}
         {activeTab === "cache-health" ? <CacheHealthTab /> : null}
+        {activeTab === "free-pool" ? <FreePoolObservatoryTab /> : null}
         {activeTab === "route-trace" ? (
           <RouteExplainabilityTab initialRequestId={initialRequestId} />
         ) : null}

@@ -22,6 +22,8 @@ export type IntelligentRoutingWeights = {
   connectionDensity: number;
   quality: number;
   reliability: number;
+  /** O9-F3.3P1-D5: FCC soft preference factor. Ships at 0 — see DEFAULT_INTELLIGENT_WEIGHTS. */
+  fccPreference: number;
 };
 
 export type IntelligentRoutingConfig = {
@@ -66,6 +68,7 @@ export const DEFAULT_INTELLIGENT_WEIGHTS: IntelligentRoutingWeights = {
   connectionDensity: 0.0476,
   quality: 0.03,
   reliability: 0,
+  fccPreference: 0,
 };
 
 export const MODE_PACK_OPTIONS = [
@@ -194,6 +197,8 @@ export function normalizeIntelligentRoutingConfig(config: unknown): IntelligentR
       quality: toFiniteNumber(rawWeights.quality) ?? DEFAULT_INTELLIGENT_WEIGHTS.quality,
       reliability:
         toFiniteNumber(rawWeights.reliability) ?? DEFAULT_INTELLIGENT_WEIGHTS.reliability,
+      fccPreference:
+        toFiniteNumber(rawWeights.fccPreference) ?? DEFAULT_INTELLIGENT_WEIGHTS.fccPreference,
     },
     routerStrategy:
       typeof configRecord.routerStrategy === "string" &&

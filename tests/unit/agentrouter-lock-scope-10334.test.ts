@@ -449,6 +449,14 @@ test("combo in-request skip: agentrouter connection-scope quota marks exhaustedC
 });
 
 test("combo in-request skip: no connectionId falls back to whole-provider exhaustion", () => {
+  // #10334 / #10419 legacy behavior, retained deliberately: agentrouter shipped
+  // with markConnectionQuotaExhaustion mirroring markAuthLevelExhaustion when no
+  // connectionId is available (whole-provider fallback). O9-F3.3P0 changed the
+  // DEFAULT for new providers (openrouter et al.) to NOT escalate an unscoped
+  // account-quota signal — see LEGACY_NO_CONNECTION_ID_PROVIDER_LOCKOUT_PROVIDERS
+  // in targetExhaustion.ts and the openrouter case in
+  // tests/unit/combo/combo-target-exhaustion.test.ts — but agentrouter stays on
+  // the legacy path here. Removing/changing that would be its own initiative.
   const sets = comboSets();
   const exhausted = applyComboTargetExhaustion(comboTarget({ connectionId: null }), {
     ...comboBaseOpts,

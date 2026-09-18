@@ -36,6 +36,21 @@ test("classify429: 429 with quota keyword in string body returns 'quota_exhauste
   assert.equal(classify429({ status: 429, body: "plan limit reached" }), "quota_exhausted");
 });
 
+test("classify429: OpenRouter free-models-per-day is quota exhausted", () => {
+  const body =
+    "Rate limit exceeded: free-models-per-day. " +
+    "Add 10 credits to unlock 1000 free model requests per day";
+  assert.equal(looksLikeQuotaExhausted(body), true);
+  assert.equal(classify429({ status: 429, body }), "quota_exhausted");
+});
+
+test("classify429: ordinary OpenRouter 429 remains a rate limit", () => {
+  assert.equal(
+    classify429({ status: 429, body: "Rate limit exceeded. Please retry shortly." }),
+    "rate_limit"
+  );
+});
+
 test("classify429: Antigravity 'Individual quota reached' body returns 'quota_exhausted'", () => {
   const body =
     "Individual quota reached. Contact your administrator to enable overages. " +
@@ -454,7 +469,10 @@ test("classify429: Moonshot organization TPD rate limit is quota_exhausted", () 
 
 test("classify429: Moonshot engine overloaded stays rate_limit", () => {
   assert.equal(
-    classify429({ status: 429, body: "The engine is currently overloaded, please try again later" }),
-    "rate_limit",
+    classify429({
+      status: 429,
+      body: "The engine is currently overloaded, please try again later",
+    }),
+    "rate_limit"
   );
 });

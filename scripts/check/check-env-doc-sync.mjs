@@ -213,6 +213,14 @@ const IGNORE_FROM_CODE = new Set([
   // NVIDIA diagnostic/test helpers used only by ad-hoc scripts.
   "NVIDIA_BASE_URL",
   "NVIDIA_MODEL",
+  // O9 Shadow benchmark/import harness knobs used only by scripts/ad-hoc/*.
+  // They are operator/session inputs for one-off evidence collection, not
+  // OmniRoute server configuration and therefore do not belong in .env.example.
+  "O9_F33C_DRY_RUN",
+  "O9_F33C_EVIDENCE_DIR",
+  "O9_SHADOW_API_KEY",
+  "O9_SHADOW_BASE_URL",
+  "SHADOW_API_KEY",
   // Discord integration ad-hoc script (scripts/ad-hoc/mesh-send.mjs) —
   // operator-supplied bot credentials, not user-facing OmniRoute config.
   "BOT_TOKEN",

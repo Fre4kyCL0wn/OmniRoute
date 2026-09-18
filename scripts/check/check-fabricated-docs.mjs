@@ -114,6 +114,7 @@ const ENV_VAR_ALLOWLIST = new Set([
   "OPENAI_BASE_URL", // env var OmniRoute passes to downstream CLIs (AGENT_PROTOCOLS_GUIDE.md)
   "NINEROUTER_API_KEY", // injected into the 9router subprocess at spawn (EMBEDDED-SERVICES.md)
   "CLAUDE_CODE_MAX_OUTPUT_TOKENS", // Claude Code CLI's own env var (CODEX-CLI-CONFIGURATION.md)
+  "ANTHROPIC_SMALL_FAST_MODEL", // Claude Code CLI model-tier env var; consumed by the downstream client, not OmniRoute server code.
   "CODEX_HOME", // Codex CLI's own config-home env var (CODEX-CLI-CONFIGURATION.md)
   // Gemini CLI's own auth-routing env vars. `omniroute run gemini` DELETES them
   // from the spawned child's env (bin/cli/commands/run.mjs) so a stored Vertex /
@@ -342,6 +343,22 @@ const ENV_VAR_DENYLIST = new Set([
   "LOCAL_ONLY", // routeGuard classification label (AGENTBRIDGE.md)
   "SPAWN_CAPABLE", // routeGuard classification label (AGENTBRIDGE.md)
   "ZEROGRAVITY_SENSITIVE_WORDS", // cross-project constant named in a comparison (STEALTH_GUIDE.md)
+  // O9 architecture/status/policy labels and external FCC symbol names. These are
+  // intentionally UPPER_SNAKE in design docs but are not OmniRoute environment variables.
+  "OPENAI_CHAT_PROFILES", // external free-claude-code adapter constant referenced by the pinned catalog audit.
+  "NO_MODEL_DISCOVERY", // provider discovery classification enum value.
+  "DYNAMIC_MODEL_DISCOVERY", // provider discovery classification enum value.
+  "NO_THINKING_ALIAS_ENABLED", // historical DB/feature label in the D4 architecture narrative, not an env read.
+  "JARVIS_GROQ_OK", // literal live-test response sentinel.
+  "DIRECT_PROVIDER_ELIGIBLE", // provider classification label.
+  "RECURRING_FREE_POOL_ELIGIBLE", // provider classification label.
+  "TRIAL_ACCESS_AVAILABLE", // provider classification label.
+  "RECURRING_FREE_POOL_INELIGIBLE", // provider classification label.
+  "OBSERVATION_CATALOG_PROVIDERS", // historical R4.2a catalog-selection constant, not runtime env.
+  "VALIDATION_REQUIRED", // A2 lifecycle status.
+  "KNOWN_INCOMPATIBLE", // A2 lifecycle status.
+  "READY_BUT_NOT_ACTIVATED", // activation-state label.
+  "STRICT_ZERO_COST", // routing policy name, not an environment variable.
 ]);
 
 /** Endpoints that don't follow the standard route.ts pattern. */

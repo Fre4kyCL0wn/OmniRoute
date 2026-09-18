@@ -32,7 +32,7 @@ export type ProviderErrorRuleMatch = {
   /**
    * Intended lock scope. #10334: for a BUILT-IN catalog rule, this field is
    * CONSUMED end-to-end only for providers in `HONORS_RULE_LOCK_SCOPE_PROVIDERS`
-   * (agentrouter-exclusive today, gated by `honorsRuleLockScope()`) — for those,
+   * (gated by `honorsRuleLockScope()`) — for those,
    * `checkFallbackError` surfaces it as `ruleScope` on its return value for the
    * persistence layer to honor instead of re-deriving scope from
    * `hasPerModelQuota()`. For every other built-in-rule provider it remains
@@ -210,7 +210,11 @@ function buildCloudflareAiRules(): ProviderErrorRule[] {
 }
 
 // ─── OpenRouter ─────────────────────────────────────────────────────────────
-// #6842: OpenRouter returns 402 for both a negative account balance and a
+// OpenRouter's `free-models-per-day` 429 is a daily allowance shared by every
+// free model on one account. It must cool that connection, not create one
+// lockout per model; sibling OpenRouter accounts remain independent.
+//
+// #6842: OpenRouter also returns 402 for both a negative account balance and a
 // depleted per-key credit cap. The global `status_402` rule already maps this
 // to `quota_exhausted` with a zero cooldown (immediate fallback to the next
 // connection), but leaves the scope ambiguous and doesn't stop the SAME
@@ -221,10 +225,53 @@ function buildCloudflareAiRules(): ProviderErrorRule[] {
 function buildOpenrouterRules(): ProviderErrorRule[] {
   return [
     {
+      id: "openrouter-free-models-per-day",
+      match: ({ status, body }) => {
+        if (status !== 429) return null;
+        const text = JSON.stringify(body ?? "");
+        if (!/free-models-per-day/i.test(text)) return null;
+        // cooldownMs here is a BOUNDED RE-PROBE, not a claimed daily-reset time.
+        // The free bucket resets on OpenRouter's own (UTC-day) schedule, which
+        // the free-access quota layer surfaces separately as quotaResetAt. 1h
+        // just keeps combo routing off a hot-loop against a spent daily budget
+        // without OmniRoute inventing a precise reset it cannot know.
+        return { reason: "quota_exhausted", scope: "connection", cooldownMs: 60 * 60 * 1000 };
+      },
+    },
+    {
       id: "openrouter-credit-exhausted-402",
       match: ({ status }) => {
         if (status !== 402) return null;
         return { reason: "quota_exhausted", scope: "connection", cooldownMs: 2 * 60 * 1000 };
+      },
+    },
+  ];
+}
+
+// ─── Groq ──────────────────────────────────────────────────────────────────
+// Groq enforces per-model RPM/RPD/TPM/TPD limits. The x-ratelimit-* headers
+// reflect the CURRENT WINDOW (RPM/TPM), not the daily window (RPD/TPD).
+// When remaining-requests hits 0 on a 429, the model's daily request quota
+// is exhausted — lock at model scope (not connection or provider).
+// We hold no reliable organizationId/projectId for Groq, so we never
+// infer provider-wide exhaustion from a single connection's signal.
+//
+// NOTE: Without real Groq TPD/RPD 429 body fixtures, we cannot build a
+// body-text matcher for daily quota exhaustion. The remaining-requests: 0
+// signal is the closest available proxy. If live shadow validation reveals
+// that remaining-requests: 0 can fire for RPM (not just RPD), this rule
+// should be refined with the actual Groq 429 body patterns.
+function buildGroqRules(): ProviderErrorRule[] {
+  return [
+    {
+      id: "groq-model-daily-quota-exhausted",
+      match: ({ status, headers }) => {
+        if (status !== 429) return null;
+        const remaining = headers["x-ratelimit-remaining-requests"];
+        if (remaining !== "0") return null;
+        // remaining-requests: 0 on a 429 → model's daily request quota is
+        // exhausted. Model scope because Groq limits are per-model.
+        return { reason: "quota_exhausted", scope: "model" };
       },
     },
   ];
@@ -303,14 +350,14 @@ export const providerRuleRegistry = new Map<string, ProviderErrorRule[]>([
   ["minimax-passthrough", buildMinimaxRules()],
   ["cloudflare-ai", buildCloudflareAiRules()],
   ["openrouter", buildOpenrouterRules()],
+  ["groq", buildGroqRules()],
   ["agentrouter", buildAgentrouterRules()],
 ]);
 
 /**
  * Providers whose ProviderErrorRuleMatch.scope is actually CONSUMED at the
  * persistence layer (markAccountUnavailable / combo target exhaustion) to pick
- * connection-vs-model lock scope. EXCLUSIVE allowlist by owner decision
- * (2026-08-14, issue #10334) — deliberately SEPARATE from
+ * connection-vs-model lock scope. EXCLUSIVE allowlist — deliberately SEPARATE from
  * FULL_TEXT_RULE_PROVIDERS: that set controls what body a rule matches against
  * (input), this one controls whether the matched scope changes caller behavior
  * (output). A provider could need one without the other.
@@ -323,7 +370,7 @@ export const providerRuleRegistry = new Map<string, ProviderErrorRule[]>([
  * mechanism (#11104) silently inert for every provider except the ones listed
  * below. See `hasOperatorRuleForProvider`.
  */
-const HONORS_RULE_LOCK_SCOPE_PROVIDERS = new Set(["agentrouter"]);
+const HONORS_RULE_LOCK_SCOPE_PROVIDERS = new Set(["agentrouter", "openrouter", "groq"]);
 
 export function honorsRuleLockScope(provider: string | null | undefined): boolean {
   if (!provider) return false;
@@ -367,8 +414,8 @@ export function egressBucketedLockProviders(): string[] {
  * error ({code, type} — message stripped by the combo callers), which is
  * enough for header/status/code rules but blind to body-text markers like
  * agentrouter's "额度不足". Providers in this set get the raw error text as
- * the match body instead. EXCLUSIVE allowlist by owner decision (2026-08-13):
- * adding a provider here is an explicit opt-in — the default path for every
+ * the match body instead. EXCLUSIVE allowlist: adding a provider here is an
+ * explicit opt-in — the default path for every
  * other provider must remain byte-for-byte unchanged.
  *
  * Operator-declared rules bypass this allowlist entirely (see
@@ -376,7 +423,7 @@ export function egressBucketedLockProviders(): string[] {
  * of the error body by construction, so a rule that never sees body text could
  * never match anything, defeating the point of declaring it.
  */
-const FULL_TEXT_RULE_PROVIDERS = new Set(["agentrouter"]);
+const FULL_TEXT_RULE_PROVIDERS = new Set(["agentrouter", "openrouter"]);
 
 /**
  * True when an operator has declared at least one rule for this provider via

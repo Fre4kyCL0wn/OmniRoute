@@ -36,7 +36,9 @@ import {
   filterSubscriptionOnlyCandidates,
   orderPoolByRung,
   type LadderOptions,
+  type LadderRung,
 } from "./subscriptionLadder";
+import { computeRungSpendSnapshot, type RungBudgetWindow } from "./rungSpendLedger";
 import {
   classifyStrictZeroCostCandidate,
   filterStrictZeroCostCandidates,
@@ -49,11 +51,17 @@ import { resolveProviderAlias } from "../model.ts";
 import { filterExcludedCandidates } from "./candidateOverrides";
 import { getExcludedConnectionIds } from "@/lib/db/autoCandidateOverrides";
 import {
+  filterFreeCandidatesByRuntimeState,
+  getProviderRuntimeState,
+  type ProviderRuntimeState,
+} from "../providerRuntimeState";
+import {
   filterResilienceBlockedCandidates,
   buildConnectionResilienceMap,
   SYNTHETIC_NOAUTH_CONNECTION_ID as RESILIENCE_NOAUTH_CONNECTION_ID,
 } from "./resilienceCandidateFilter";
 import type { ChaosTuning } from "./chaosEngine";
+import { isAutoComboNoAuthProvider } from "./noAuthAutoPolicy";
 
 /** #4235 Phase B: optional category/tier overlay for `auto/<category>:<tier>` combos.
  * #6453: optional `family` overlay for `auto/<family>` combos (e.g. `auto/glm`) —
@@ -179,6 +187,11 @@ export interface PreparedVirtualAutoComboInputs {
   readonly authTypeByConnectionId?: ReadonlyMap<string, string | null>;
   /** Operator settings for the subscription ladder; absent = feature off. */
   readonly subscriptionLadder?: SubscriptionLadderSettings;
+  /** Paid-rung spend for the configured budget window. */
+  readonly rungSpendUsd?: Partial<Record<LadderRung, number>>;
+  /** False blocks paid rungs whenever their spend cannot be priced completely. */
+  readonly rungSpendAccountingComplete?: boolean;
+  readonly rungSpendWindow?: RungBudgetWindow;
 }
 
 /**
@@ -196,6 +209,7 @@ export interface SubscriptionLadderSettings {
   exitCutoffPercent?: number;
   reentryMinRemainingPercent?: number;
   rungBudgetUsd?: Record<string, number>;
+  budgetWindow?: RungBudgetWindow;
   /** Staleness bound for a cached quota reading, derived from the existing
    * `autoRefreshProviderQuotaInterval` exactly as STRICT_ZERO_COST does. */
   maxStateAgeMs: number;
@@ -214,8 +228,10 @@ function readSubscriptionLadderSettings(
       : undefined;
   const exitCutoffPercent = numeric("exitCutoffPercent");
   const reentryMinRemainingPercent = numeric("reentryMinRemainingPercent");
+  const budgetWindow = value.budgetWindow === "daily" ? "daily" : "monthly";
   return {
     maxStateAgeMs,
+    budgetWindow,
     ...(exitCutoffPercent === undefined ? {} : { exitCutoffPercent }),
     ...(reentryMinRemainingPercent === undefined ? {} : { reentryMinRemainingPercent }),
     ...(value.rungBudgetUsd && typeof value.rungBudgetUsd === "object"
@@ -260,6 +276,11 @@ function buildLadderOptions(
       ? {}
       : { reentryMinRemainingPercent: tuning.reentryMinRemainingPercent }),
     ...(tuning?.rungBudgetUsd ? { rungBudgetUsd: tuning.rungBudgetUsd } : {}),
+    resolveRungSpendUsd: (rung) => {
+      if (rung !== "cheap" && rung !== "premium") return 0;
+      if (prepared.rungSpendAccountingComplete === false) return Number.POSITIVE_INFINITY;
+      return prepared.rungSpendUsd?.[rung] ?? 0;
+    },
   };
 }
 
@@ -326,34 +347,15 @@ function hasUsableConnectionCredential(conn: VirtualFactoryConn): boolean {
 
 const SYNTHETIC_NOAUTH_CONNECTION_ID = RESILIENCE_NOAUTH_CONNECTION_ID;
 
-// Allowlist of no-auth (keyless) providers permitted to enter the `auto`/`auto-*`
-// candidate pool. Narrowed to the backends verified to answer without any
-// configuration on our reference egress (VPS .15): `opencode` returns 200
-// there, while duckduckgo-web (429/VQD rate limit),
-// chipotle (502), aihorde (401, anon key rejected)
-// and the others are unreliable. The excluded providers stay fully usable via
-// direct `<alias>/<model>` calls — they are just kept OUT of auto-routing until
-// re-verified. Re-add an id here to bring it back into every auto/* pool.
-//
-// Scope (operator decision 2026-07-24, refs #8183/#6453/#7032): this allowlist
-// targets public-HTTP-egress reliability for the category/tier and flat-variant
-// `auto/*` pools (auto/best-free, auto/coding:fast, ...). It does NOT apply to
-// `auto/<family>` pools (auto/glm, auto/zai, ...) — a family combo is an
-// identity selector ("whatever genuinely serves GLM"), not a reliability-curated
-// pool, so it admits any no-auth backend that genuinely serves the family (e.g.
-// auggie, a local CLI subprocess with zero HTTP egress, belongs in auto/glm
-// regardless of this list). See the `bypassAllowlist` param below.
-const AUTO_COMBO_NOAUTH_ALLOWLIST = new Set<string>(["opencode"]);
-
+// Shared policy lives in noAuthAutoPolicy.ts so Jarvis managed pools and
+// native auto/* pools cannot drift on which anonymous backends are safe for
+// unattended LLM traffic. Family pools may still bypass the allowlist.
 function isChatAutoComboNoAuthProvider(
   providerDef: NoAuthProviderDefinition,
   bypassAllowlist: boolean
 ): boolean {
-  if (providerDef.noAuth !== true) return false;
-  if (!bypassAllowlist && !AUTO_COMBO_NOAUTH_ALLOWLIST.has(providerDef.id)) return false;
-  if (!Array.isArray(providerDef.serviceKinds) || providerDef.serviceKinds.length === 0)
-    return true;
-  return providerDef.serviceKinds.includes("llm");
+  if (!providerDef.id) return false;
+  return isAutoComboNoAuthProvider(providerDef.id, { bypassAllowlist });
 }
 
 function getNoAuthCandidates(
@@ -817,8 +819,43 @@ export async function prepareVirtualAutoComboInputs(
     authTypeByConnectionId.set(conn.id, typeof conn.authType === "string" ? conn.authType : null);
   }
   const subscriptionLadder = readSubscriptionLadderSettings(settings);
+  const paidBudgetConfigured = ["cheap", "premium"].some((rung) => {
+    const value = subscriptionLadder.rungBudgetUsd?.[rung];
+    return typeof value === "number" && Number.isFinite(value) && value > 0;
+  });
+  let rungSpendUsd: Partial<Record<LadderRung, number>> | undefined;
+  let rungSpendAccountingComplete: boolean | undefined;
+  let rungSpendWindow: RungBudgetWindow | undefined;
+  if (paidBudgetConfigured) {
+    try {
+      const snapshot = await computeRungSpendSnapshot({
+        window: subscriptionLadder.budgetWindow,
+        resolveAuthType: (connectionId) => authTypeByConnectionId.get(connectionId) ?? null,
+      });
+      rungSpendUsd = snapshot.spendUsd;
+      rungSpendAccountingComplete = snapshot.accountingComplete;
+      rungSpendWindow = snapshot.window;
+      if (!snapshot.accountingComplete) {
+        log.warn(
+          "AUTO",
+          `Paid-rung spend accounting is incomplete (${snapshot.unpricedRows} unpriced row(s)); paid rungs fail closed.`
+        );
+      }
+    } catch (error) {
+      rungSpendAccountingComplete = false;
+      rungSpendWindow = subscriptionLadder.budgetWindow;
+      log.warn("AUTO", "Failed to build paid-rung spend ledger; paid rungs fail closed", { error });
+    }
+  }
+  const ladderPrepared = {
+    authTypeByConnectionId,
+    subscriptionLadder,
+    ...(rungSpendUsd ? { rungSpendUsd } : {}),
+    ...(rungSpendAccountingComplete === undefined ? {} : { rungSpendAccountingComplete }),
+    ...(rungSpendWindow ? { rungSpendWindow } : {}),
+  };
   if (!options.includeResolvedCapabilities) {
-    return { regularCandidates, familyCandidates, authTypeByConnectionId, subscriptionLadder };
+    return { regularCandidates, familyCandidates, ...ladderPrepared };
   }
 
   // One uninterrupted bulk read of all three capability tables for this prepare only.
@@ -832,8 +869,7 @@ export async function prepareVirtualAutoComboInputs(
   return {
     regularCandidates: await attachPreparedCapabilityValues(regularCandidates, capabilityState),
     familyCandidates: await attachPreparedCapabilityValues(familyCandidates, capabilityState),
-    authTypeByConnectionId,
-    subscriptionLadder,
+    ...ladderPrepared,
   };
 }
 
@@ -1003,6 +1039,38 @@ export async function createVirtualAutoComboFromPrepared(
       );
       effectivePool = [];
     }
+  }
+
+  if (spec?.tier === "free" && effectivePool.length > 0) {
+    const stateRequests = new Map<string, Promise<ProviderRuntimeState>>();
+    // Keyed by provider:connection only — model is deliberately omitted from the
+    // key. filterFreeCandidatesByRuntimeState reads exclusively the
+    // provider-account fields of the state (quotaState / quotaScope /
+    // accountState === provider_account exhaustion), none of which are
+    // model-derived, so one state per connection is correct here. A future
+    // consumer that needs the model-scoped fields (costClass, model lockout)
+    // must NOT reuse this deduplicated map.
+    for (const candidate of effectivePool) {
+      const connectionIds = [
+        ...(candidate.allowedConnectionIds ?? []),
+        ...(candidate.connectionId && candidate.connectionId !== RESILIENCE_NOAUTH_CONNECTION_ID
+          ? [candidate.connectionId]
+          : []),
+      ];
+      for (const connectionId of connectionIds) {
+        const key = `${candidate.provider}:${connectionId}`;
+        if (!stateRequests.has(key)) {
+          stateRequests.set(
+            key,
+            getProviderRuntimeState(candidate.provider, connectionId, candidate.model)
+          );
+        }
+      }
+    }
+    effectivePool = filterFreeCandidatesByRuntimeState(
+      effectivePool,
+      await Promise.all(stateRequests.values())
+    );
   }
 
   // Subscription-first routing (`auto/subscription`, `auto/thrifty`). Applied

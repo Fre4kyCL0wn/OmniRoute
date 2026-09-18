@@ -51,7 +51,10 @@ import {
   getQuotaScopeLabelForProvider,
   isAntigravityQuotaProvider,
 } from "@omniroute/open-sse/services/antigravityQuotaFamily.ts";
-import { rehydrateAntigravityFamilyLocksForConnections, persistAntigravityFamilyCooldownIfQuota } from "@omniroute/open-sse/services/antigravityFamilyCooldown.ts";
+import {
+  rehydrateAntigravityFamilyLocksForConnections,
+  persistAntigravityFamilyCooldownIfQuota,
+} from "@omniroute/open-sse/services/antigravityFamilyCooldown.ts";
 import { markQuotaPreflightAccountUnavailable } from "./quotaPreflightUnavailable.ts";
 import { getCreditsMode } from "@omniroute/open-sse/services/antigravityCredits.ts";
 import { preferAntigravityConnectionsWithStoredProject } from "@omniroute/open-sse/services/antigravityProjectPersistence.ts";
@@ -2365,28 +2368,28 @@ export async function getProviderCredentialsWithQuotaPreflight(
 }
 
 /**
- * #10334 — Guard for the agentrouter-exclusive "connection scope" quota
- * cooldown branch in markAccountUnavailable. The "never terminal" invariant of
+ * Guard for built-in/provider-configured connection-scope quota cooldowns.
+ * The "never terminal" invariant of
  * that branch is NOT structurally guaranteed by `ruleScope === "connection"`
  * alone — it also depends on the provider rule table only ever pairing scope
- * "connection" with a genuinely transient reason. Today
- * (`buildAgentrouterRules()` in providerErrorRules.ts) that is true: the only
- * rule declaring scope "connection" is the quota-exhausted one. But a FUTURE
- * agentrouter rule for a permanent account state (e.g. "账号已封禁") — or a 402
+ * "connection" with a genuinely transient reason. Built-in matching rules that
+ * use this path declare quota exhaustion, but a future rule for a permanent
+ * account state (e.g. "账号已封禁") — or a 402
  * added to `AGENTROUTER_ERROR_STATUSES` with scope "connection", a natural-
  * looking choice for an account ban — would otherwise be silently downgraded
  * to a transient cooldown here instead of going through
  * resolveTerminalConnectionStatus()/auto-disable below. Require the
  * reason/permanent/creditsExhausted signals checkFallbackError already
  * computes to explicitly confirm "this is quota, not a permanent state"
- * before taking the early return.
+ * before taking the early return. `honorsRuleLockScope()` is the exclusive
+ * built-in/operator opt-in boundary.
  *
  * Exported (not just inlined) so a synthetic permanent/credits-exhausted
  * `fallbackResult` can be tested directly — no rule in the table produces
  * that combination today, so this predicate is the only way to pin the guard
  * without editing the (production) rule table just for a test.
  */
-export function isAgentrouterConnectionQuotaScope(
+export function isConnectionQuotaScope(
   provider: string | null | undefined,
   fallbackResult: {
     ruleScope?: "model" | "provider" | "connection";
@@ -2404,8 +2407,10 @@ export function isAgentrouterConnectionQuotaScope(
   );
 }
 
+export const isAgentrouterConnectionQuotaScope = isConnectionQuotaScope;
+
 async function resolveDailyResetForProvider(
-  provider: string | null,
+  provider: string | null
 ): Promise<{ timezone?: unknown; hour?: unknown } | null> {
   if (!provider) return null;
   try {
@@ -2643,7 +2648,7 @@ export async function markAccountUnavailable(
       effectiveProviderProfile,
       null,
       null,
-      await resolveDailyResetForProvider(provider),
+      await resolveDailyResetForProvider(provider)
     );
 
     // T-PROBE: probe-origin failures (model test-all) must never remove the
@@ -2691,12 +2696,10 @@ export async function markAccountUnavailable(
 
     const isPerModelQuotaProvider = hasPerModelQuota(provider, model, connectionPassthroughModels);
 
-    // #10334 — agentrouter EXCLUSIVE: the matched provider rule declared scope
-    // "connection" for account-wide quota exhaustion ("额度不足"). agentrouter is
-    // a passthroughModels provider (isPerModelQuotaProvider === true), so without
-    // this branch the next `if` would treat it like any other passthrough 429 and
-    // lock a SINGLE model — leaving combo routing to burn one upstream call per
-    // remaining model of the same exhausted account. Must run BEFORE that block.
+    // A matched provider rule declared scope "connection" for account-wide quota
+    // exhaustion. Passthrough providers otherwise take the next branch and lock a
+    // SINGLE model, leaving sibling free models on the exhausted account eligible.
+    // Must run BEFORE that block.
     // Deliberately ignores persistUnavailableState/isCombo: for combo the caller
     // downgrades persistUnavailableState to false, and the generic path further
     // below would then lock per MODEL instead of cooling the connection — exactly
@@ -2704,10 +2707,10 @@ export async function markAccountUnavailable(
     // renewing quota window, not "credits_exhausted"/"banned"/"expired".
     //
     // The "never terminal" invariant above is NOT structurally guaranteed by
-    // ruleScope === "connection" alone — see isAgentrouterConnectionQuotaScope's
-    // doc comment for why (a future permanent-state rule could pair scope
+    // ruleScope === "connection" alone — see isConnectionQuotaScope's doc
+    // comment for why (a future permanent-state rule could pair scope
     // "connection" with a non-quota reason). That predicate is the actual guard.
-    const ruleScopeIsConnection = isAgentrouterConnectionQuotaScope(provider, fallbackResult);
+    const ruleScopeIsConnection = isConnectionQuotaScope(provider, fallbackResult);
     // #2997's disableCooling opt-out is respected here (`!disableCooling` below):
     // a connection with disableCooling=true skips this branch entirely and falls
     // into the per-model-quota block further down, which locks the model for up
@@ -2723,7 +2726,7 @@ export async function markAccountUnavailable(
         fallbackResult.cooldownMs > 0 ? fallbackResult.cooldownMs : COOLDOWN_MS.rateLimit;
       await updateProviderConnection(connectionId, {
         lastErrorType: fallbackResult.reason || RateLimitReason.QUOTA_EXHAUSTED,
-        lastError: `Account quota exhausted (${provider})`,
+        lastError: sanitizeErrorMessage(errorText) || `Account quota exhausted (${provider})`,
         lastErrorAt: new Date().toISOString(),
         errorCode: status,
         backoffLevel: fallbackResult.newBackoffLevel ?? backoffLevel,
@@ -2897,7 +2900,13 @@ export async function markAccountUnavailable(
         "AUTH",
         `Model-only lockout for ${provider}:${model} — ${status} ${reason} ${Math.ceil(lockout.cooldownMs / 1000)}s (failureCount=${lockout.failureCount}, connection stays active)`
       );
-      persistAntigravityFamilyCooldownIfQuota({ provider, connectionId, model, cooldownMs: lockout.cooldownMs, reason });
+      persistAntigravityFamilyCooldownIfQuota({
+        provider,
+        connectionId,
+        model,
+        cooldownMs: lockout.cooldownMs,
+        reason,
+      });
       return { shouldFallback: true, cooldownMs: lockout.cooldownMs };
     }
     const result = fallbackResult;
