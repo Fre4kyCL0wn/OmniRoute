@@ -3,6 +3,7 @@ import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import {
   getModelAvailabilityInventoriesForProvider,
   getModelAvailabilityInventory,
+  getModelAvailabilitySummaryByProvider,
 } from "@/lib/db/modelAvailability";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,10 @@ export async function GET(request: Request) {
   const providerId = url.searchParams.get("providerId")?.trim() ?? "";
   const connectionId = url.searchParams.get("connectionId")?.trim() ?? "";
   if (!providerId) {
-    return NextResponse.json({ error: "providerId is required" }, { status: 400 });
+    return NextResponse.json(
+      { summary: getModelAvailabilitySummaryByProvider() },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   }
 
   if (connectionId) {

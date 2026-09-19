@@ -145,7 +145,9 @@ export function isModelSyncInternalRequest(request: { headers: Headers }): boole
 }
 
 /**
- * Fetch all provider connections that have autoSync enabled.
+ * Fetch all provider connections that have scheduled model discovery enabled.
+ * Both the legacy `autoSync` flag and the dashboard's `autoFetchModels` flag
+ * opt a connection into the same bounded periodic upstream catalog refresh.
  */
 async function getAutoSyncConnections(): Promise<
   Array<{ id: string; provider: string; name?: string }>
@@ -165,7 +167,7 @@ async function getAutoSyncConnections(): Promise<
         conn.providerSpecificData && typeof conn.providerSpecificData === "object"
           ? (conn.providerSpecificData as Record<string, unknown>)
           : {};
-      if (psd.autoSync !== true) continue;
+      if (psd.autoSync !== true && psd.autoFetchModels !== true) continue;
       if (typeof conn.id !== "string" || typeof conn.provider !== "string") continue;
       autoSyncConnections.push({
         id: conn.id,

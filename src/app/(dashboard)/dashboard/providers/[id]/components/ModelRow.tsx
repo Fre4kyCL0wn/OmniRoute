@@ -359,6 +359,23 @@ export default function ModelRow({
           {fullModel}
         </code>
         <ModelSourceBadge source={model.source} />
+        {testStatus && (
+          <span
+            className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
+              testStatus === "ok"
+                ? "border-green-500/40 bg-green-500/10 text-green-500"
+                : testStatus === "quota"
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-500"
+                  : "border-red-500/40 bg-red-500/10 text-red-500"
+            }`}
+          >
+            {testStatus === "ok"
+              ? providerText(t, "modelAvailabilityAvailable", "available")
+              : testStatus === "quota"
+                ? providerText(t, "modelAvailabilityQuota", "quota")
+                : providerText(t, "modelAvailabilityBlocked", "blocked")}
+          </span>
+        )}
         {onSetAlias && (
           <span className="flex min-w-0 items-center text-[9px] gap-1">
             {editing ? (

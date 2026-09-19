@@ -3,7 +3,7 @@ export const MODEL_AVAILABILITY_SCHEMA_VERSION = 1 as const;
 export type ModelAvailabilityState =
   "available" | "rate_limited" | "quota_exhausted" | "unavailable" | "degraded" | "incompatible";
 
-export type ModelAvailabilitySource = "manual_test" | "batch_test" | "reprobe";
+export type ModelAvailabilitySource = "manual_test" | "batch_test" | "reprobe" | "runtime";
 
 export interface ModelAvailabilityRecord {
   providerId: string;

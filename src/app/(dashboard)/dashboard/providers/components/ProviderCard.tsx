@@ -36,6 +36,16 @@ interface ProviderStats {
   allDisabled?: boolean;
   expiryStatus?: "expired" | "expiring_soon" | string | null;
   codexServiceTier?: "default" | "priority" | "flex" | null;
+  modelAvailability?: {
+    totalChecked: number;
+    available: number;
+    rateLimited: number;
+    quotaExhausted: number;
+    unavailable: number;
+    degraded: number;
+    incompatible: number;
+    blocked: number;
+  } | null;
 }
 
 const KIND_LABEL_KEYS: Record<string, { key: string; fallback: string }> = {
@@ -617,6 +627,47 @@ const ProviderCard = forwardRef<ProviderCardHandle, ProviderCardProps>(function 
                             onActivate: handleWarningBadgeActivate,
                           }
                         : undefined
+                    )}
+                    {stats.modelAvailability && stats.modelAvailability.totalChecked > 0 && (
+                      <>
+                        {stats.modelAvailability.quotaExhausted +
+                          stats.modelAvailability.rateLimited >
+                          0 && (
+                          <Badge variant="warning" size="sm" icon="warning">
+                            {providerText(t, "modelQuotaFlag", "{count} model quota", {
+                              count:
+                                stats.modelAvailability.quotaExhausted +
+                                stats.modelAvailability.rateLimited,
+                            })}
+                          </Badge>
+                        )}
+                        {stats.modelAvailability.unavailable +
+                          stats.modelAvailability.incompatible >
+                          0 && (
+                          <Badge variant="error" size="sm" icon="error">
+                            {providerText(t, "modelBlockedFlag", "{count} model blocked", {
+                              count:
+                                stats.modelAvailability.unavailable +
+                                stats.modelAvailability.incompatible,
+                            })}
+                          </Badge>
+                        )}
+                        {stats.modelAvailability.degraded > 0 && (
+                          <Badge variant="warning" size="sm" icon="speed">
+                            {providerText(t, "modelDegradedFlag", "{count} model degraded", {
+                              count: stats.modelAvailability.degraded,
+                            })}
+                          </Badge>
+                        )}
+                        {stats.modelAvailability.blocked === 0 &&
+                          stats.modelAvailability.available > 0 && (
+                            <Badge variant="success" size="sm" icon="check_circle">
+                              {providerText(t, "modelsAvailableFlag", "{count} models OK", {
+                                count: stats.modelAvailability.available,
+                              })}
+                            </Badge>
+                          )}
+                      </>
                     )}
                     {stats.expiryStatus === "expired" && (
                       <Badge variant="error" size="sm" dot>

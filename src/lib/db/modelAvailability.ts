@@ -41,6 +41,85 @@ export function getModelAvailabilityInventory(
   return row ? parseInventory(row.value) : null;
 }
 
+export interface ModelAvailabilityProviderSummary {
+  providerId: string;
+  totalChecked: number;
+  available: number;
+  rateLimited: number;
+  quotaExhausted: number;
+  unavailable: number;
+  degraded: number;
+  incompatible: number;
+  blocked: number;
+}
+
+export function getAllModelAvailabilityInventories(): ModelAvailabilityInventory[] {
+  const db = getDbInstance();
+  const rows = db
+    .prepare("SELECT value FROM key_value WHERE namespace = ?")
+    .all(NAMESPACE) as Array<{ value: string }>;
+  return rows
+    .map((row) => parseInventory(row.value))
+    .filter((inventory): inventory is ModelAvailabilityInventory => inventory !== null);
+}
+
+export function getModelAvailabilitySummaryByProvider(): Record<
+  string,
+  ModelAvailabilityProviderSummary
+> {
+  const byProvider = new Map<string, Map<string, ModelAvailabilityRecord[]>>();
+  for (const inventory of getAllModelAvailabilityInventories()) {
+    const byModel =
+      byProvider.get(inventory.providerId) ?? new Map<string, ModelAvailabilityRecord[]>();
+    byProvider.set(inventory.providerId, byModel);
+    for (const record of Object.values(inventory.models)) {
+      const rows = byModel.get(record.modelId) ?? [];
+      rows.push(record);
+      byModel.set(record.modelId, rows);
+    }
+  }
+
+  const summary: Record<string, ModelAvailabilityProviderSummary> = {};
+  const blockedPriority: ModelAvailabilityRecord["state"][] = [
+    "quota_exhausted",
+    "rate_limited",
+    "degraded",
+    "unavailable",
+    "incompatible",
+  ];
+  for (const [providerId, byModel] of byProvider) {
+    const entry: ModelAvailabilityProviderSummary = {
+      providerId,
+      totalChecked: 0,
+      available: 0,
+      rateLimited: 0,
+      quotaExhausted: 0,
+      unavailable: 0,
+      degraded: 0,
+      incompatible: 0,
+      blocked: 0,
+    };
+    for (const records of byModel.values()) {
+      entry.totalChecked += 1;
+      if (records.some((record) => record.state === "available")) {
+        entry.available += 1;
+        continue;
+      }
+      entry.blocked += 1;
+      const state = blockedPriority.find((candidate) =>
+        records.some((record) => record.state === candidate)
+      );
+      if (state === "rate_limited") entry.rateLimited += 1;
+      else if (state === "quota_exhausted") entry.quotaExhausted += 1;
+      else if (state === "unavailable") entry.unavailable += 1;
+      else if (state === "degraded") entry.degraded += 1;
+      else if (state === "incompatible") entry.incompatible += 1;
+    }
+    summary[providerId] = entry;
+  }
+  return summary;
+}
+
 export function getModelAvailabilityInventoriesForProvider(
   providerId: string
 ): ModelAvailabilityInventory[] {

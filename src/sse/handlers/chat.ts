@@ -132,6 +132,10 @@ import {
   isJarvisIntentRoutingEnabled,
   resolveJarvisIntentRoute,
 } from "@/lib/failover/jarvisIntentProfile";
+import {
+  recordRuntimeModelFailure,
+  recordRuntimeModelSuccessIfTracked,
+} from "@/lib/modelAvailability/runtimeRecorder";
 
 // Pipeline integration — wired modules
 import { classify429FromError, type FailureKind } from "@/shared/utils/classify429";
@@ -2021,6 +2025,15 @@ async function handleSingleModelChat(
 
       if (result.success) {
         clearModelLock(provider, credentials.connectionId, model);
+        try {
+          recordRuntimeModelSuccessIfTracked({
+            providerId: provider,
+            connectionId: credentials.connectionId,
+            modelId: model,
+          });
+        } catch {
+          // Availability persistence is observability/routing state only; never fail a healthy request.
+        }
         // #12254: exactly-once breaker accounting — combo successes are recorded by
         // combo.ts (recordProviderSuccess); live combo tests never touch the breaker.
         if (classifyProviderBreakerResult(result, isCombo, forceLiveComboTest) === "success") {
@@ -2229,6 +2242,30 @@ async function handleSingleModelChat(
         continue;
       }
 
+      // Persist model-specific runtime availability before any emergency fallback can
+      // return early. 404/model-not-found and 429 are model-routing signals; generic
+      // auth/transport/provider failures stay with the existing connection/provider health layers.
+      const errorStr = String(result.rawMessage ?? result.error ?? "");
+      const failureKind =
+        result.status === 429
+          ? isSubscriptionQuotaText(errorStr.toLowerCase(), provider)
+            ? "quota_exhausted"
+            : classify429FromError({ status: result.status, message: errorStr })
+          : undefined;
+      try {
+        recordRuntimeModelFailure({
+          providerId: provider,
+          connectionId: credentials.connectionId,
+          modelId: model,
+          status: Number(result.status || 0),
+          errorText: errorStr,
+          errorCode: result.errorCode ?? null,
+          quotaExhausted: failureKind === "quota_exhausted",
+        });
+      } catch {
+        // Runtime availability persistence must never replace the original upstream response.
+      }
+
       // Emergency fallback for budget exhaustion (402 / billing / quota keywords):
       // reroute to a free model (default provider/model: nvidia + openai/gpt-oss-120b) exactly once.
       // Combo targets never emergency-hop: the combo is the operator's fallback policy
@@ -2300,17 +2337,8 @@ async function handleSingleModelChat(
       // Check if it's a daily quota exhausted error (e.g., ModelScope/Kimi "today's quota for model")
       // Daily quota lockout overrides subsequent rate_limited lockout, ensuring lockout until tomorrow 0:00
       let dailyQuotaExhausted = false;
-      // #7360: prefer the full un-sanitized upstream text over result.error
-      // (truncated to its first line for the client response body) — Gemini's
-      // TPM/RPD metric name and retry hint live on lines 2-3, after the
-      // generic "quota exceeded" preamble on line 1.
-      const errorStr = String(result.rawMessage ?? result.error ?? "");
-      const failureKind =
-        result.status === 429
-          ? isSubscriptionQuotaText(errorStr.toLowerCase(), provider)
-            ? "quota_exhausted"
-            : classify429FromError({ status: result.status, message: errorStr })
-          : undefined;
+      // `errorStr` / `failureKind` were resolved before emergency fallback so the
+      // original model state is persisted even when fallback succeeds.
       if (result.status === 429 && isDailyQuotaExhausted(errorStr)) {
         // Parse which model is quota-limited
         const match = errorStr.match(/today's quota for model ([^,]+)/);

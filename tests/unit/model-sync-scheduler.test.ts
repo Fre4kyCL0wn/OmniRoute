@@ -322,7 +322,7 @@ test("initCloudSync skips auto initialization during build and test processes un
   );
 });
 
-test("modelSyncScheduler starts once, honors env interval and syncs only active autoSync connections", async () => {
+test("modelSyncScheduler starts once, honors env interval and syncs active autoSync or autoFetch connections", async () => {
   await providersDb.createProviderConnection({
     provider: "openai",
     authType: "apikey",
@@ -336,6 +336,13 @@ test("modelSyncScheduler starts once, honors env interval and syncs only active 
     name: "Manual Sync",
     apiKey: "sk-manual",
     providerSpecificData: { autoSync: false },
+  });
+  await providersDb.createProviderConnection({
+    provider: "gemini",
+    authType: "apikey",
+    name: "Auto Fetch Models",
+    apiKey: "sk-auto-fetch",
+    providerSpecificData: { autoSync: false, autoFetchModels: true },
   });
   await providersDb.createProviderConnection({
     provider: "anthropic",
@@ -374,9 +381,9 @@ test("modelSyncScheduler starts once, honors env interval and syncs only active 
 
     await timers.timeouts[0].fn();
 
-    assert.equal(fetchCalls.length, 1);
-    assert.match(fetchCalls[0].url, /^http:\/\/127\.0\.0\.1:20128\//);
-    assert.match(fetchCalls[0].url, /\/api\/providers\/.*\/sync-models$/);
+    assert.equal(fetchCalls.length, 2);
+    assert.ok(fetchCalls.every((call) => /^http:\/\/127\.0\.0\.1:20128\//.test(call.url)));
+    assert.ok(fetchCalls.every((call) => /\/api\/providers\/.*\/sync-models$/.test(call.url)));
     assert.equal(fetchCalls[0].options.method, "POST");
     assert.equal(fetchCalls[0].options.redirect, "error");
     assert.equal(fetchCalls[0].options.headers["Content-Type"], "application/json");

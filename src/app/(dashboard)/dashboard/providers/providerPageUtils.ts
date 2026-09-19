@@ -500,9 +500,7 @@ export function filterConfiguredProviderEntries<TProvider>(
       return connections.some(
         (conn) =>
           connectionBelongsToProviderPage(conn.provider, entry.providerId) &&
-          connectionSearchHaystacks(conn).some((haystack) =>
-            matchesAnyToken(haystack, searchQuery)
-          )
+          connectionSearchHaystacks(conn).some((haystack) => matchesAnyToken(haystack, searchQuery))
       );
     });
   }
@@ -634,6 +632,19 @@ export interface ProviderPageData {
   settings: any | null;
   /** OpenRouter-sourced popularity/identity enrichment, keyed by provider slug. Empty if the sync hasn't run yet or the fetch failed. */
   openRouterProviderStats: OpenRouterProviderStatsEntry[];
+  modelAvailabilitySummary: Record<string, ModelAvailabilityProviderSummarySnapshot>;
+}
+
+export interface ModelAvailabilityProviderSummarySnapshot {
+  providerId: string;
+  totalChecked: number;
+  available: number;
+  rateLimited: number;
+  quotaExhausted: number;
+  unavailable: number;
+  degraded: number;
+  incompatible: number;
+  blocked: number;
 }
 
 /** Mirrors ProviderPopularityEntry from src/lib/catalog/openrouterProviderStats.ts (kept local to avoid a server-only import from a client component). */
@@ -691,14 +702,21 @@ export async function loadProviderPageData(
     }
   };
 
-  const [connectionsData, nodesData, expirationsData, settingsData, openRouterStatsData] =
-    await Promise.all([
-      safeJson("/api/providers"),
-      safeJson("/api/provider-nodes"),
-      safeJson("/api/providers/expiration"),
-      safeJson("/api/settings", { cache: "no-store" }),
-      safeJson("/api/providers/openrouter-stats"),
-    ]);
+  const [
+    connectionsData,
+    nodesData,
+    expirationsData,
+    settingsData,
+    openRouterStatsData,
+    modelAvailabilityData,
+  ] = await Promise.all([
+    safeJson("/api/providers"),
+    safeJson("/api/provider-nodes"),
+    safeJson("/api/providers/expiration"),
+    safeJson("/api/settings", { cache: "no-store" }),
+    safeJson("/api/providers/openrouter-stats"),
+    safeJson("/api/models/availability", { cache: "no-store" }),
+  ]);
 
   return {
     connections: Array.isArray(connectionsData?.connections) ? connectionsData.connections : [],
@@ -712,5 +730,9 @@ export async function loadProviderPageData(
     openRouterProviderStats: Array.isArray(openRouterStatsData?.data)
       ? openRouterStatsData.data
       : [],
+    modelAvailabilitySummary:
+      modelAvailabilityData?.summary && typeof modelAvailabilityData.summary === "object"
+        ? modelAvailabilityData.summary
+        : {},
   };
 }

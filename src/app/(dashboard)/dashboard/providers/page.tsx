@@ -34,7 +34,11 @@ import {
   upsertProviderNodeById,
   loadProviderPageData,
 } from "./providerPageUtils";
-import type { ProviderEntry, OpenRouterProviderStatsEntry } from "./providerPageUtils";
+import type {
+  ProviderEntry,
+  OpenRouterProviderStatsEntry,
+  ModelAvailabilityProviderSummarySnapshot,
+} from "./providerPageUtils";
 import { OpenRouterProviderStatsProvider } from "./context/openRouterProviderStatsContext";
 import {
   shouldSyncProviderDisplayMode,
@@ -241,6 +245,9 @@ function ProvidersPageContent() {
   const [openRouterProviderStats, setOpenRouterProviderStats] = useState<
     OpenRouterProviderStatsEntry[]
   >([]);
+  const [modelAvailabilitySummary, setModelAvailabilitySummary] = useState<
+    Record<string, ModelAvailabilityProviderSummarySnapshot>
+  >({});
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   // #4240: media-category (serviceKind) filter — composes with activeCategory,
   // search and configured-only. null = no serviceKind filter.
@@ -297,6 +304,7 @@ function ProvidersPageContent() {
         if (data.blockedProviders) setBlockedProviders(data.blockedProviders);
         setCodexGlobalServiceMode(getCodexGlobalServiceMode(data.settings));
         setOpenRouterProviderStats(data.openRouterProviderStats);
+        setModelAvailabilitySummary(data.modelAvailabilitySummary);
       } catch (error) {
         console.log("Error fetching data:", error);
       } finally {
@@ -458,6 +466,7 @@ function ProvidersPageContent() {
       allDisabled,
       expiryStatus,
       codexServiceTier,
+      modelAvailability: modelAvailabilitySummary[providerId] ?? null,
     };
   };
 
