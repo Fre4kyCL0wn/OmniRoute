@@ -281,11 +281,18 @@ test("runtime launchers publish the actual internal listener scheme", () => {
   assert.match(standalone, /OMNIROUTE_INTERNAL_SCHEME\s*=\s*tlsOptions\s*\?\s*["']https["']/);
 });
 
-test("initCloudSync: startup initialization also starts model sync scheduler", () => {
+test("initCloudSync: startup awaits model sync before starting immediate registry jobs", () => {
   const filePath = path.join(process.cwd(), "src/lib/initCloudSync.ts");
   const source = fs.readFileSync(filePath, "utf8");
 
-  assert.match(source, /startModelSyncScheduler\s*\(/);
+  const syncIndex = source.indexOf("await runModelSyncCycleOnce()");
+  const schedulerIndex = source.indexOf(
+    "startModelSyncScheduler(undefined, undefined, { runStartupCycle: false })"
+  );
+  const registryIndex = source.indexOf("await registry.startAll()");
+  assert.ok(syncIndex >= 0, "bootstrap must await the initial model sync");
+  assert.ok(schedulerIndex > syncIndex, "periodic scheduler must start after the awaited sync");
+  assert.ok(registryIndex > schedulerIndex, "R47 registry jobs must start only after model sync");
 });
 
 test("cloud sync bootstrap is wired to server startup, not app layout imports", () => {
@@ -320,6 +327,20 @@ test("initCloudSync skips auto initialization during build and test processes un
     ),
     false
   );
+});
+
+test("modelSyncScheduler can skip its delayed startup cycle after an awaited bootstrap sync", async () => {
+  const timers = installTimerStubs();
+  try {
+    const scheduler = await loadScheduler("skip-delayed-startup");
+    scheduler.startModelSyncScheduler("http://127.0.0.1:7777", 10_000, { runStartupCycle: false });
+    assert.equal(timers.timeouts.length, 0);
+    assert.equal(timers.intervals.length, 1);
+    assert.equal(timers.intervals[0].ms, 10_000);
+    scheduler.stopModelSyncScheduler();
+  } finally {
+    timers.restore();
+  }
 });
 
 test("modelSyncScheduler starts once, honors env interval and syncs active autoSync or autoFetch connections", async () => {

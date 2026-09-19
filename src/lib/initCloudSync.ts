@@ -1,5 +1,8 @@
 import initializeCloudSync from "@/shared/services/initializeCloudSync";
-import { startModelSyncScheduler } from "@/shared/services/modelSyncScheduler";
+import {
+  runModelSyncCycleOnce,
+  startModelSyncScheduler,
+} from "@/shared/services/modelSyncScheduler";
 import { isAutomatedTestProcess } from "@/shared/utils/testProcess";
 import { getJobRegistry } from "@/lib/jobRegistry";
 import { registerBudgetResetJob } from "@/lib/jobs/budgetResetJob";
@@ -36,7 +39,12 @@ export async function ensureCloudSyncInitialized() {
     try {
       await initializeCloudSync();
       await backfillVolcPlanAutoSync();
-      startModelSyncScheduler();
+
+      // R47's interval job runs immediately when JobRegistry starts. Complete one
+      // upstream model sync first so autonomous reconciliation never evaluates an
+      // empty pre-sync catalog and disables the managed free pool on boot.
+      await runModelSyncCycleOnce();
+      startModelSyncScheduler(undefined, undefined, { runStartupCycle: false });
 
       // startAll() runs each interval job's first tick synchronously, so it has to
       // come after initializeCloudSync(). The old wiring got that ordering two

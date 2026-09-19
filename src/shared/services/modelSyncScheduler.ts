@@ -269,6 +269,18 @@ async function runSyncCycle(apiBaseUrl: string): Promise<void> {
   }
 }
 
+/** Run one bounded model-sync cycle now and wait for it to finish. */
+export async function runModelSyncCycleOnce(
+  apiBaseUrl = getModelSyncInternalBaseUrl()
+): Promise<void> {
+  await runSyncCycle(resolveModelSyncInternalBaseUrl(apiBaseUrl));
+}
+
+export interface StartModelSyncSchedulerOptions {
+  /** Default true. Disable when the caller already awaited runModelSyncCycleOnce(). */
+  runStartupCycle?: boolean;
+}
+
 /**
  * Start the model sync scheduler.
  * @param apiBaseUrl — internal base URL to call OmniRoute's own API
@@ -276,7 +288,8 @@ async function runSyncCycle(apiBaseUrl: string): Promise<void> {
  */
 export function startModelSyncScheduler(
   apiBaseUrl = getModelSyncInternalBaseUrl(),
-  intervalMs = DEFAULT_INTERVAL_MS
+  intervalMs = DEFAULT_INTERVAL_MS,
+  options: StartModelSyncSchedulerOptions = {}
 ): void {
   if (schedulerTimer) {
     console.log("[ModelSync] Scheduler already running — skipping start");
@@ -291,9 +304,13 @@ export function startModelSyncScheduler(
 
   console.log(`[ModelSync] Scheduler started — interval: ${effectiveIntervalMs / 3_600_000}h`);
 
-  // Run immediately on startup (staggered by 5s to avoid startup congestion)
-  const startupDelay = setTimeout(() => runSyncCycle(trustedApiBaseUrl), 5_000);
-  startupDelay.unref?.();
+  // Default callers retain the staggered startup cycle. The server bootstrap
+  // awaits one explicit cycle first, then disables this duplicate so R47 cannot
+  // run against an empty/stale catalog during process startup.
+  if (options.runStartupCycle !== false) {
+    const startupDelay = setTimeout(() => runSyncCycle(trustedApiBaseUrl), 5_000);
+    startupDelay.unref?.();
+  }
 
   // Codex-only: revalidate catalog only on first-start or app upgrade (not every boot).
   void import("./codexCatalogRevalidation")
