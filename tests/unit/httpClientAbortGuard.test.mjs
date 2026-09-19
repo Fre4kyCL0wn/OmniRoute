@@ -103,9 +103,27 @@ test("shouldSwallowUncaught absorbs the real 'aborted' uncaughtException signatu
   assert.equal(shouldSwallowUncaught(abortErr, "uncaughtException"), true);
   assert.equal(shouldSwallowUncaught(abortErr, undefined), true);
   assert.equal(
-    shouldSwallowUncaught(Object.assign(new Error("ECONNRESET"), { code: "ECONNRESET" }), "uncaughtException"),
+    shouldSwallowUncaught(
+      Object.assign(new Error("ECONNRESET"), { code: "ECONNRESET" }),
+      "uncaughtException"
+    ),
     true
   );
+});
+
+test("shouldSwallowUncaught absorbs classified direct response-start timeouts", () => {
+  const timeout = Object.assign(new Error("upstream response did not start"), {
+    name: "TimeoutError",
+    code: "DIRECT_RESPONSE_START_TIMEOUT",
+  });
+  assert.equal(shouldSwallowUncaught(timeout, "unhandledRejection"), true);
+  assert.equal(shouldSwallowUncaught(timeout, "uncaughtException"), true);
+
+  const unrelatedTimeout = Object.assign(new Error("unknown timeout"), {
+    name: "TimeoutError",
+    code: "SOME_OTHER_TIMEOUT",
+  });
+  assert.equal(shouldSwallowUncaught(unrelatedTimeout, "unhandledRejection"), false);
 });
 
 test("shouldSwallowUncaught preserves crash semantics for genuine errors", () => {
@@ -160,6 +178,14 @@ test("installProcessCrashGuard() with no logger swallows aborts instead of dying
       Object.assign(new Error("request_signal_aborted"), { name: "AbortError" }),
       Promise.resolve()
     );
+    process.emit(
+      "unhandledRejection",
+      Object.assign(new Error("Direct response did not start within 30000ms"), {
+        name: "TimeoutError",
+        code: "DIRECT_RESPONSE_START_TIMEOUT"
+      }),
+      Promise.resolve()
+    );
     console.log("ALIVE");
     process.exit(0);
   `;
@@ -188,7 +214,11 @@ test("installProcessCrashGuard still crashes on genuine errors (no over-swallowi
     process.emit("uncaughtException", new Error("genuine failure"), "uncaughtException");
     console.log("SHOULD_NOT_REACH");
   `;
-  const { status, stdout, stderr: _stderr } = await new Promise((resolve, reject) => {
+  const {
+    status,
+    stdout,
+    stderr: _stderr,
+  } = await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--input-type=module", "-e", script, guardPath], {
       stdio: ["ignore", "pipe", "pipe"],
     });
