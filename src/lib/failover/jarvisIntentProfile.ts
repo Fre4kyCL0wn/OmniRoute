@@ -10,6 +10,7 @@ import {
   type IntentType,
 } from "@omniroute/open-sse/services/intentClassifier.ts";
 import { classifyTask, type TaskLevel } from "@omniroute/open-sse/services/taskAwareRouting.ts";
+import { detectMediaParts, type MediaKind } from "@omniroute/open-sse/utils/mediaParts";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 
 export const JARVIS_INTENT_ROUTING_FLAG = "OMNIROUTE_JARVIS_INTENT_ROUTING_ENABLED";
@@ -69,26 +70,101 @@ export function extractJarvisIntentText(body: Record<string, unknown>): string {
   return chunks.join("\n").trim();
 }
 
-function collectModalities(value: unknown, out: Set<string>, depth = 0): void {
-  if (depth > 6 || value == null) return;
-  if (Array.isArray(value)) {
-    for (const item of value) collectModalities(item, out, depth + 1);
-    return;
-  }
-  if (typeof value !== "object") return;
-  const row = value as Record<string, unknown>;
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** Top-level request plus the one wrapper OmniRoute admission already recognizes. */
+function requestLayers(body: Record<string, unknown>): Record<string, unknown>[] {
+  const wrapped = asRecord(body.request);
+  return wrapped ? [body, wrapped] : [body];
+}
+
+function toolChoiceRequiresCompatibility(value: unknown): boolean {
+  if (typeof value === "string") return /^(required|any)$/i.test(value);
+  const choice = asRecord(value);
+  if (!choice) return false;
+  const type = typeof choice.type === "string" ? choice.type.toLowerCase() : "";
+  if (type === "none" || type === "auto") return false;
+  if (["required", "any", "tool", "function", "allowed_tools"].includes(type)) return true;
+  if (asRecord(choice.function) || typeof choice.name === "string") return true;
+  // Unknown non-empty structured tool_choice is safer on the compatibility-gated path.
+  return Object.keys(choice).length > 0;
+}
+
+function containsToolProtocol(value: unknown, depth = 0): boolean {
+  if (depth > 8 || value == null) return false;
+  if (Array.isArray(value)) return value.some((entry) => containsToolProtocol(entry, depth + 1));
+  const row = asRecord(value);
+  if (!row) return false;
   const type = typeof row.type === "string" ? row.type.toLowerCase() : "";
-  if (/image/.test(type) || "image_url" in row || "image" in row) out.add("image");
-  if (/audio/.test(type) || "audio" in row || "input_audio" in row) out.add("audio");
-  if (/video/.test(type) || "video" in row) out.add("video");
-  for (const child of Object.values(row)) collectModalities(child, out, depth + 1);
+  const role = typeof row.role === "string" ? row.role.toLowerCase() : "";
+  if (
+    role === "tool" ||
+    ["tool_use", "tool_result", "function_call", "function_result"].includes(type) ||
+    (Array.isArray(row.tool_calls) && row.tool_calls.length > 0) ||
+    asRecord(row.function_call)
+  ) {
+    return true;
+  }
+  return Object.values(row).some((entry) => containsToolProtocol(entry, depth + 1));
+}
+
+export interface JarvisToolSignals {
+  toolCount: number;
+  requiresCompatibility: boolean;
+  reasons: string[];
+}
+
+export function detectJarvisToolSignals(body: Record<string, unknown>): JarvisToolSignals {
+  let toolCount = 0;
+  let forcedChoice = false;
+  let protocolHistory = false;
+  const seen = new Set<unknown[]>();
+
+  for (const layer of requestLayers(body)) {
+    for (const key of ["tools", "functions", "additional_tools"] as const) {
+      const value = layer[key];
+      if (!Array.isArray(value) || seen.has(value)) continue;
+      seen.add(value);
+      toolCount += value.length;
+    }
+    forcedChoice ||= toolChoiceRequiresCompatibility(layer.tool_choice);
+    protocolHistory ||= containsToolProtocol(layer.messages) || containsToolProtocol(layer.input);
+  }
+
+  const reasons: string[] = [];
+  if (toolCount > 0) reasons.push("declared-tools");
+  if (forcedChoice) reasons.push("forced-tool-choice");
+  if (protocolHistory) reasons.push("tool-protocol-history");
+  return {
+    toolCount,
+    requiresCompatibility: toolCount > 0 || forcedChoice || protocolHistory,
+    reasons,
+  };
+}
+
+function mediaMessages(value: unknown): Array<{ role?: string; content?: unknown }> {
+  if (!Array.isArray(value) || value.length === 0) return [];
+  const messageLike = value.filter((item) => asRecord(item)?.content !== undefined) as Array<{
+    role?: string;
+    content?: unknown;
+  }>;
+  if (messageLike.length > 0) return messageLike;
+  // Responses-style direct content-item arrays are normalized as one synthetic message.
+  return [{ role: "user", content: value }];
 }
 
 export function detectJarvisModalities(body: Record<string, unknown>): string[] {
-  const out = new Set<string>();
-  collectModalities(body.messages, out);
-  collectModalities(body.input, out);
-  return [...out].sort();
+  const kinds = new Set<MediaKind>();
+  for (const layer of requestLayers(body)) {
+    for (const source of [layer.messages, layer.input]) {
+      for (const part of detectMediaParts(mediaMessages(source))) kinds.add(part.kind);
+    }
+  }
+  return [...kinds].sort();
 }
 
 export function resolveJarvisIntentRoute(
@@ -100,12 +176,13 @@ export function resolveJarvisIntentRoute(
   const text = extractJarvisIntentText(body);
   const intent = classifyPromptIntent(text || "");
   const task = classifyTask(body);
-  const toolCount = Array.isArray(body.tools) ? body.tools.length : 0;
+  const toolSignals = detectJarvisToolSignals(body);
+  const toolCount = toolSignals.toolCount;
   const modalities = detectJarvisModalities(body);
   const reasons: string[] = [`intent:${intent}`, `task:${task.level}`];
 
-  if (toolCount > 0) {
-    reasons.push("tool-compatibility-managed-pool");
+  if (toolSignals.requiresCompatibility) {
+    reasons.push("tool-compatibility-managed-pool", ...toolSignals.reasons);
     return {
       requestedModel: JARVIS_INTENT_SOURCE_MODEL,
       routeModel: JARVIS_INTENT_SOURCE_MODEL,
@@ -134,8 +211,8 @@ export function resolveJarvisIntentRoute(
 
   const hasImage = modalities.includes("image");
   const hasOtherMedia = modalities.includes("audio") || modalities.includes("video");
-  if (hasImage && hasOtherMedia) {
-    reasons.push("multimodal-input", "strict-free-tier");
+  if (hasOtherMedia) {
+    reasons.push(hasImage ? "multimodal-input" : "non-text-media-input", "strict-free-tier");
     return {
       requestedModel: JARVIS_INTENT_SOURCE_MODEL,
       routeModel: "auto/multimodal:free",
