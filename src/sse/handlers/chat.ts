@@ -128,6 +128,10 @@ import {
 } from "./reasoningRouting";
 import { createVirtualAutoCombo, resolveAutoRoutingState } from "./autoRouting";
 import { getComboFailureLogError } from "./comboFailureLogging";
+import {
+  isJarvisIntentRoutingEnabled,
+  resolveJarvisIntentRoute,
+} from "@/lib/failover/jarvisIntentProfile";
 
 // Pipeline integration — wired modules
 import { classify429FromError, type FailureKind } from "@/shared/utils/classify429";
@@ -175,7 +179,10 @@ import { registerBailianCodingPlanQuotaFetcher } from "@omniroute/open-sse/servi
 import { registerQwenTokenPlanQuotaFetcher } from "@omniroute/open-sse/services/qwenTokenPlanQuotaFetcher.ts";
 import { registerCrofUsageFetcher } from "@omniroute/open-sse/services/crofUsageFetcher.ts";
 import { registerDeepseekQuotaFetcher } from "@omniroute/open-sse/services/deepseekQuotaFetcher.ts";
-import { registerMoonshotQuotaFetcher, registerMoonshotFetchersForNodes } from "@omniroute/open-sse/services/moonshotQuotaFetcher.ts";
+import {
+  registerMoonshotQuotaFetcher,
+  registerMoonshotFetchersForNodes,
+} from "@omniroute/open-sse/services/moonshotQuotaFetcher.ts";
 import { registerOpenrouterQuotaFetcher } from "@omniroute/open-sse/services/openrouterQuotaFetcher.ts";
 import { registerOpencodeQuotaFetcher } from "@omniroute/open-sse/services/opencodeQuotaFetcher.ts";
 import { registerGrokWebQuotaFetcher } from "@omniroute/open-sse/services/grokQuotaFetcher.ts";
@@ -232,7 +239,7 @@ void import("@/lib/db/providers")
         id: typeof node.id === "string" ? node.id : null,
         prefix: typeof node.prefix === "string" ? node.prefix : null,
         baseUrl: typeof node.baseUrl === "string" ? node.baseUrl : null,
-      })),
+      }))
     );
   })
   .catch((error) => {
@@ -946,6 +953,27 @@ async function handleChatImplementation(
   resolvedModelStr = reasoningRouting.modelStr;
   reasoningDecision = reasoningRouting.reasoningDecision;
   requestRoutingTags = reasoningRouting.requestRoutingTags;
+
+  // O9-F3.6: Jarvis request-time profile selection. Coding and every tool-bearing
+  // request stay on the compatibility-gated managed pool. Tool-free requests
+  // may enter the live-catalog-backed free category pools. Explicit T05/web/reasoning
+  // policies above still retain precedence because this only acts on jarvis-auto.
+  if (isJarvisIntentRoutingEnabled()) {
+    const jarvisIntent = resolveJarvisIntentRoute(resolvedModelStr, body);
+    if (jarvisIntent && jarvisIntent.routeModel !== resolvedModelStr) {
+      log.info(
+        "JARVIS_INTENT",
+        `${resolvedModelStr} → ${jarvisIntent.routeModel} | profile=${jarvisIntent.profile} intent=${jarvisIntent.intent} task=${jarvisIntent.taskLevel} reasons=${jarvisIntent.reasons.join(",")}`
+      );
+      resolvedModelStr = jarvisIntent.routeModel;
+      body = { ...body, model: jarvisIntent.routeModel };
+    } else if (jarvisIntent) {
+      log.debug(
+        "JARVIS_INTENT",
+        `${resolvedModelStr} retained | profile=${jarvisIntent.profile} intent=${jarvisIntent.intent} reasons=${jarvisIntent.reasons.join(",")}`
+      );
+    }
+  }
 
   const autoRouting = await resolveAutoRoutingState(resolvedModelStr);
   if (autoRouting.response) return autoRouting.response;

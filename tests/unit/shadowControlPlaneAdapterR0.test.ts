@@ -736,3 +736,27 @@ test("R4.5a: exact-route runtime state rejects only the locked model on a shared
     "JARVIS_APPROVED"
   );
 });
+
+test("R4.7 no-auth native persistence rehydrates missing connection pin as synthetic noauth", () => {
+  const state = mapComboToCurrentComboState({
+    id: "managed-noauth",
+    name: "jarvis-managed/free-coding",
+    strategy: "auto",
+    models: [{ kind: "model", providerId: "opencode", model: "opencode/big-pickle", weight: 100 }],
+    config: null,
+  });
+  assert.equal(state.members[0]?.providerId, "opencode");
+  assert.equal(state.members[0]?.model, "big-pickle");
+  assert.equal(state.members[0]?.connectionId, "noauth");
+});
+
+test("R4.7 missing connection pin on non-noauth provider remains fail-closed sentinel", () => {
+  const state = mapComboToCurrentComboState({
+    id: "foreign-unpinned",
+    name: "foreign",
+    strategy: "priority",
+    models: [{ kind: "model", providerId: "future-provider", model: "model-x", weight: 100 }],
+    config: null,
+  });
+  assert.equal(state.members[0]?.connectionId, "unspecified-connection");
+});

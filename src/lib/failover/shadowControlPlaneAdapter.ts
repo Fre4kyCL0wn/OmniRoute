@@ -47,6 +47,8 @@
  */
 import type { BillableConnection } from "@omniroute/open-sse/services/autoCombo/connectionBilling.ts";
 import type { ProviderRuntimeState } from "@omniroute/open-sse/services/providerRuntimeState.ts";
+import { AUTO_COMBO_NOAUTH_ALLOWLIST } from "@omniroute/open-sse/services/autoCombo/noAuthAutoPolicy.ts";
+import { SYNTHETIC_NOAUTH_CONNECTION_ID } from "@omniroute/open-sse/services/autoCombo/resilienceCandidateFilter.ts";
 
 import { applyObservationRefresh, emptyInventory } from "../providerOnboarding/catalog";
 import {
@@ -670,15 +672,13 @@ function parseJarvisManagedOwnership(raw: unknown): CurrentComboOwnershipRecord 
 }
 
 /**
- * `connectionId` is required on `ManagedComboMember` but a native combo step
- * OmniRoute itself wrote may omit it (provider-wide fallback, not pinned to
- * one connection). This sentinel is only ever load-bearing for a combo this
- * module does NOT own — `planReconciliation` blocks (`foreign`/`drifted`)
- * before it ever diffs a foreign combo's `members` against desired state, so
- * the sentinel never participates in an actual reconciliation decision. A
- * combo Jarvis itself applies always carries an explicit `connectionId` on
- * every member (A7's own `ManagedComboMember` requires it), so this path
- * never fires for a genuinely Jarvis-owned combo.
+ * `connectionId` is required on `ManagedComboMember`, while native Combo
+ * persistence may omit it. For allowlisted no-auth providers that omission is
+ * the canonical persisted representation of the synthetic `noauth` connection:
+ * DB health intentionally removes a pin that has no provider_connections row.
+ * Rehydrate that synthetic identity here so Jarvis does not detect false drift
+ * immediately after its own successful apply. Unknown/foreign providers keep a
+ * fail-closed sentinel instead.
  */
 const UNSPECIFIED_CONNECTION_SENTINEL = "unspecified-connection";
 
@@ -702,7 +702,9 @@ export function mapComboToCurrentComboState(combo: ShadowComboSnapshot): Current
       connectionId:
         typeof step.connectionId === "string" && step.connectionId.trim() !== ""
           ? step.connectionId
-          : UNSPECIFIED_CONNECTION_SENTINEL,
+          : AUTO_COMBO_NOAUTH_ALLOWLIST.has(providerId)
+            ? SYNTHETIC_NOAUTH_CONNECTION_ID
+            : UNSPECIFIED_CONNECTION_SENTINEL,
       model,
     });
   }
