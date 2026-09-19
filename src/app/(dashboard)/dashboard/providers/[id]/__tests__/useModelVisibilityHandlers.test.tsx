@@ -70,7 +70,13 @@ beforeEach(() => {
   (
     globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
-  vi.stubGlobal("fetch", vi.fn());
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ inventory: null }),
+    } as Response)
+  );
   vi.clearAllMocks();
 });
 
@@ -87,18 +93,32 @@ describe("useModelVisibilityHandlers", () => {
     const hook = renderHook();
 
     expect(hook.get().autoHideFailed).toBe(false);
+    expect(hook.get().visibilityFilter).toBe("visible");
   });
 
   it("does not hide a model when a single-model test fails", async () => {
     const fetchMock = vi.mocked(fetch);
-    fetchMock.mockResolvedValueOnce({
-      ok: false,
-      json: () =>
-        Promise.resolve({
-          status: "error",
-          error: "model unavailable",
-        }),
-    } as Response);
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/api/models/availability")) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ inventory: null }),
+        } as Response;
+      }
+      if (url === "/api/models/test") {
+        return {
+          ok: false,
+          json: () =>
+            Promise.resolve({
+              status: "error",
+              error: "model unavailable",
+              availabilityState: "unavailable",
+            }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
 
     const hook = renderHook();
 
@@ -108,12 +128,12 @@ describe("useModelVisibilityHandlers", () => {
         .onTestModel("claude-opus-4-8", "anthropic-compatible-cc-test/claude-opus-4-8");
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "/api/models/test",
-      expect.objectContaining({ method: "POST" })
-    );
+    const modelTestCall = fetchMock.mock.calls.find(([url]) => String(url) === "/api/models/test");
+    expect(modelTestCall).toBeDefined();
+    expect(modelTestCall?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).startsWith("/api/models/availability"))
+    ).toBe(true);
     expect(
       fetchMock.mock.calls.some(([url]) => String(url).startsWith("/api/provider-models"))
     ).toBe(false);

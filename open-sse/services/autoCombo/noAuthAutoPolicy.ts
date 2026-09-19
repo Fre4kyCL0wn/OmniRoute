@@ -6,7 +6,11 @@ import { NOAUTH_PROVIDERS } from "@/shared/constants/providers";
  * unsuitable for unattended coding traffic because of transport reliability,
  * service kind, or policy constraints.
  */
-export const AUTO_COMBO_NOAUTH_ALLOWLIST: ReadonlySet<string> = new Set(["opencode"]);
+// 2026-09-19: OpenCode now rejects unattended proxy traffic with HTTP 403
+// ("free tier can only be used from within OpenCode"). Keep direct/manual
+// provider access intact, but do not auto-enroll any anonymous provider until
+// it is re-verified for unattended OmniRoute/Jarvis traffic.
+export const AUTO_COMBO_NOAUTH_ALLOWLIST: ReadonlySet<string> = new Set();
 
 export interface NoAuthAutoProviderDefinition {
   id?: string;

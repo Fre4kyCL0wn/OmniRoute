@@ -681,8 +681,22 @@ function parseJarvisManagedOwnership(raw: unknown): CurrentComboOwnershipRecord 
  * fail-closed sentinel instead.
  */
 const UNSPECIFIED_CONNECTION_SENTINEL = "unspecified-connection";
+const LEGACY_RETIRED_NOAUTH_PROVIDER = "opencode";
+const LEGACY_RETIRED_NOAUTH_LOGICAL_ID = buildManagedComboLogicalId("free-coding");
+
+function shouldRehydrateLegacyManagedNoAuth(
+  providerId: string,
+  ownership: CurrentComboOwnershipRecord | null
+): boolean {
+  return (
+    providerId === LEGACY_RETIRED_NOAUTH_PROVIDER &&
+    ownership?.logicalId === LEGACY_RETIRED_NOAUTH_LOGICAL_ID
+  );
+}
 
 export function mapComboToCurrentComboState(combo: ShadowComboSnapshot): CurrentComboState {
+  const jarvisManagedRaw = combo.config ? combo.config.jarvisManaged : undefined;
+  const ownership = parseJarvisManagedOwnership(jarvisManagedRaw);
   const members: ManagedComboMember[] = [];
   for (const rawStep of combo.models) {
     if (!rawStep || typeof rawStep !== "object") continue;
@@ -702,15 +716,13 @@ export function mapComboToCurrentComboState(combo: ShadowComboSnapshot): Current
       connectionId:
         typeof step.connectionId === "string" && step.connectionId.trim() !== ""
           ? step.connectionId
-          : AUTO_COMBO_NOAUTH_ALLOWLIST.has(providerId)
+          : AUTO_COMBO_NOAUTH_ALLOWLIST.has(providerId) ||
+              shouldRehydrateLegacyManagedNoAuth(providerId, ownership)
             ? SYNTHETIC_NOAUTH_CONNECTION_ID
             : UNSPECIFIED_CONNECTION_SENTINEL,
       model,
     });
   }
-
-  const jarvisManagedRaw = combo.config ? combo.config.jarvisManaged : undefined;
-  const ownership = parseJarvisManagedOwnership(jarvisManagedRaw);
 
   // The `policyMode` a future apply step should persist alongside
   // `ManagedComboOwnership` so fingerprint recomputation on read-back is

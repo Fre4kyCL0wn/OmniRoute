@@ -9,6 +9,8 @@ import { createCombo, getComboById, getComboByName, getCombos, updateCombo } fro
 import { getActivationApproval } from "@/lib/db/providerActivationApprovals";
 import { getProviderObservationInventory } from "@/lib/db/providerObservedModels";
 import { getProviderModelCompatibilityInventory } from "@/lib/db/providerModelCompatibility";
+import { getModelAvailabilityInventory } from "@/lib/db/modelAvailability";
+import { overlayModelAvailabilityRuntimeState } from "@/lib/modelAvailability/runtimeOverlay";
 import { getRawProviderConnections } from "@/lib/db/providers";
 import {
   getSyncedAvailableModelsByConnection,
@@ -213,6 +215,12 @@ export async function buildManagedFreeCodingDryRun(
 
   const observationInventoryByConnection = new Map<string, ProviderObservationInventory>();
   const compatibilityInventoryByConnection = new Map<string, ProviderModelCompatibilityInventory>();
+  const modelAvailabilityByConnection = new Map(
+    connections.map((connection) => [
+      connection.connectionId,
+      getModelAvailabilityInventory(connection.connectionId),
+    ])
+  );
   for (const connection of connections) {
     const inventory = getProviderObservationInventory(connection.connectionId);
     if (inventory) observationInventoryByConnection.set(connection.connectionId, inventory);
@@ -247,7 +255,15 @@ export async function buildManagedFreeCodingDryRun(
           connection.connectionId,
           model.providerModelId
         );
-        runtimeStateByRoute.set(`${connection.connectionId}::${model.canonicalModelId}`, state);
+        const availability = modelAvailabilityByConnection.get(connection.connectionId);
+        const availabilityRecord =
+          availability?.providerId === connection.provider
+            ? availability.models[model.providerModelId]
+            : undefined;
+        runtimeStateByRoute.set(
+          `${connection.connectionId}::${model.canonicalModelId}`,
+          overlayModelAvailabilityRuntimeState(state, availabilityRecord)
+        );
       } catch {
         // Omit the exact-route override: the pipeline falls back to its
         // conservative unknown-state projection, never an optimistic state.

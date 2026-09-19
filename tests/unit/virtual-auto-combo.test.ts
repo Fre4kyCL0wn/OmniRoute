@@ -11,6 +11,8 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 
 const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
+const modelsDb = await import("../../src/lib/db/models.ts");
+const availabilityDb = await import("../../src/lib/db/modelAvailability.ts");
 const virtualFactory = await import("../../open-sse/services/autoCombo/virtualFactory.ts");
 
 type VirtualComboResult = Awaited<ReturnType<typeof virtualFactory.createVirtualAutoCombo>>;
@@ -172,6 +174,42 @@ test("createVirtualAutoCombo groups same-provider web sessions behind one logica
   );
 });
 
+test("createVirtualAutoCombo excludes only the exact connection/model with persisted quota failure", async () => {
+  const conn = await providersDb.createProviderConnection({
+    provider: "kimi-web",
+    authType: "apikey",
+    name: "Kimi Availability Test",
+    providerSpecificData: { token: "kimi-web-session-token" },
+    defaultModel: "k3",
+  });
+  await modelsDb.replaceSyncedAvailableModelsForConnection("kimi-web", conn.id, [
+    { id: "k3" },
+    { id: "k3-fast" },
+  ]);
+  availabilityDb.recordModelTestAvailability({
+    providerId: "kimi-web",
+    connectionId: conn.id,
+    modelId: "k3",
+    result: { status: "rate_limited", httpStatus: 429, rateLimited: true, isQuota: true },
+    source: "manual_test",
+    nowMs: Date.parse("2026-09-19T20:00:00.000Z"),
+  });
+
+  const combo: VirtualComboResult = await virtualFactory.createVirtualAutoCombo(undefined);
+
+  assert.equal(
+    combo.models.some((model) => model.providerId === "kimi-web" && model.model === "kimi-web/k3"),
+    false,
+    "known quota-exhausted route must not remain in an auto pool"
+  );
+  assert.ok(
+    combo.models.some(
+      (model) => model.providerId === "kimi-web" && model.model === "kimi-web/k3-fast"
+    ),
+    "a healthy/unknown sibling model on the same connection must remain eligible"
+  );
+});
+
 test("createVirtualAutoCombo excludes trigger-bypassed retired Qwen rows", async () => {
   const db = core.getDbInstance();
   db.exec(`
@@ -261,29 +299,24 @@ test("createVirtualAutoCombo includes clean-room ChatGPT Web and excludes its le
   assert.equal(combo.autoConfig.candidatePool.includes("cgpt-web"), false);
 });
 
-test("createVirtualAutoCombo includes no-auth OpenCode Free without provider_connections rows", async () => {
+test("createVirtualAutoCombo excludes unattended OpenCode after provider policy restriction", async () => {
   const combo: VirtualComboResult = await virtualFactory.createVirtualAutoCombo("fast");
 
-  const opencode = combo.models.find((model) => model.providerId === "opencode");
-  assert.ok(
-    opencode,
-    "OpenCode Free should appear in auto/* even when it has no provider_connections row"
+  assert.equal(
+    combo.models.some((model) => model.providerId === "opencode"),
+    false
   );
-  assert.equal(opencode.connectionId, "noauth");
-  assert.equal(opencode.model, "oc/big-pickle");
-  assert.ok(combo.autoConfig.candidatePool.includes("opencode"));
+  assert.equal(combo.autoConfig.candidatePool.includes("opencode"), false);
 });
 
 test("createVirtualAutoCombo restricts the no-auth pool to the allowlist", async () => {
-  // Policy: the no-auth (keyless) auto-combo allowlist is narrowed to `opencode`
-  // (open-sse/services/autoCombo/virtualFactory.ts::AUTO_COMBO_NOAUTH_ALLOWLIST) —
-  // the keyless backend verified to work without configuration on our reference
-  // egress. The others stay usable via direct `<alias>/<model>` calls but must
-  // NOT be auto-routed to. Dedicated guard:
+  // Policy: no no-auth provider is currently approved for unattended auto-routing.
+  // OpenCode remains directly addressable, but its free tier now rejects proxied
+  // unattended traffic outside the OpenCode client with HTTP 403. Dedicated guard:
   // tests/unit/noauth-autocombo-allowlist.test.ts.
   const combo: VirtualComboResult = await virtualFactory.createVirtualAutoCombo("fast");
 
-  for (const allowed of ["opencode"]) {
+  for (const allowed of [] as string[]) {
     const models = combo.models.filter((m) => m.providerId === allowed);
     assert.ok(models.length >= 1, `${allowed} should have at least one model`);
     assert.ok(
@@ -292,7 +325,7 @@ test("createVirtualAutoCombo restricts the no-auth pool to the allowlist", async
     );
   }
 
-  for (const excluded of ["duckduckgo-web", "chipotle", "aihorde"]) {
+  for (const excluded of ["opencode", "duckduckgo-web", "chipotle", "aihorde"]) {
     assert.equal(
       combo.models.some((model) => model.providerId === excluded),
       false,

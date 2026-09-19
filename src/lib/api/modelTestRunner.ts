@@ -552,6 +552,7 @@ export async function runSingleModelTest(
     } catch {
       errorMsg = res.statusText || errorMsg;
     }
+    const quotaFlags = classifyTestErrorQuota(errorMsg);
     const result: SingleModelTestResult = {
       modelId: fullModelStr,
       status: "rate_limited",
@@ -560,6 +561,8 @@ export async function runSingleModelTest(
       httpStatus: res.status,
       error: errorMsg,
       rateLimited: true,
+      ...(quotaFlags.isTransient ? { isTransient: true } : {}),
+      ...(quotaFlags.isQuota ? { isQuota: true } : {}),
       ...(retryAfter !== undefined ? { retryAfter } : {}),
     };
     clearTimeout(timeoutHandle);

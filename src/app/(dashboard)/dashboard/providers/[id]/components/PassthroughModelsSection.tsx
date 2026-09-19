@@ -134,7 +134,7 @@ export default function PassthroughModelsSection({
   const autoHideFailed =
     autoHideFailedProp !== undefined ? autoHideFailedProp : localAutoHideFailed;
   const setAutoHideFailed = onAutoHideFailedChange ?? setLocalAutoHideFailed;
-  const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("all");
+  const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("visible");
   const [freeFilter, setFreeFilter] = useState<"all" | "free" | "paid">("all");
   const [sortFreeFirst, setSortFreeFirst] = useState(false);
   const notify = useNotificationStore();
@@ -322,12 +322,14 @@ export default function PassthroughModelsSection({
       source: model.source,
     });
 
+    const operationallyBlocked =
+      modelTestStatus?.[model.modelId] === "error" || modelTestStatus?.[model.modelId] === "quota";
     const matchesVisibility =
       visibilityFilter === "all"
         ? true
         : visibilityFilter === "visible"
-          ? !model.isHidden
-          : model.isHidden;
+          ? !model.isHidden && !operationallyBlocked
+          : model.isHidden || operationallyBlocked;
 
     const matchesFreeFilter =
       freeFilter === "all" ? true : freeFilter === "free" ? model.isFree : !model.isFree;
@@ -337,7 +339,12 @@ export default function PassthroughModelsSection({
   const displayModels = sortFreeFirst
     ? sortModelsFreeFirst(filteredModels, { isFree: (m) => m.isFree, key: (m) => m.modelId })
     : filteredModels;
-  const activeCount = allModels.filter((model) => !model.isHidden).length;
+  const activeCount = allModels.filter(
+    (model) =>
+      !model.isHidden &&
+      modelTestStatus?.[model.modelId] !== "error" &&
+      modelTestStatus?.[model.modelId] !== "quota"
+  ).length;
 
   const handleAdd = async () => {
     if (!newModel.trim() || adding) return;

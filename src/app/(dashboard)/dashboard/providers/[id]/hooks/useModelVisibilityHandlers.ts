@@ -20,7 +20,7 @@
  * ProviderDetailPageClient.
  */
 
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   formatProviderModelsErrorResponse,
   providerText,
@@ -116,11 +116,13 @@ export function useModelVisibilityHandlers({
   const [clearingModels, setClearingModels] = useState(false);
   const [modelFilter, setModelFilter] = useState("");
   const [testingModelId, setTestingModelId] = useState<string | null>(null);
-  const [modelTestStatus, setModelTestStatus] = useState<Record<string, "ok" | "error" | "quota">>({});
+  const [modelTestStatus, setModelTestStatus] = useState<Record<string, "ok" | "error" | "quota">>(
+    {}
+  );
   const [testingAll, setTestingAll] = useState(false);
   const [testProgress, setTestProgress] = useState<{ done: number; total: number } | null>(null);
   const [autoHideFailed, setAutoHideFailed] = useState(false);
-  const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("all");
+  const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("visible");
 
   const providerAliasEntries = useMemo(
     () =>
@@ -129,6 +131,57 @@ export function useModelVisibilityHandlers({
       ) as [string, string][],
     [modelAliases, providerStorageAlias]
   );
+
+  const selectedConnectionId =
+    selectedConnection && typeof selectedConnection.id === "string" ? selectedConnection.id : "";
+  const selectedConnectionProvider =
+    selectedConnection && typeof selectedConnection.provider === "string"
+      ? selectedConnection.provider
+      : "";
+  const providerNodeId = providerNode && typeof providerNode.id === "string" ? providerNode.id : "";
+
+  useEffect(() => {
+    const connectionId = selectedConnectionId;
+    const availabilityProviderId = selectedConnectionProvider || providerNodeId || providerId;
+    let cancelled = false;
+    if (!connectionId) {
+      queueMicrotask(() => {
+        if (!cancelled) setModelTestStatus({});
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/models/availability?providerId=${encodeURIComponent(availabilityProviderId)}&connectionId=${encodeURIComponent(connectionId)}`,
+          { cache: "no-store" }
+        );
+        const payload = response?.ok ? await response.json() : null;
+        if (cancelled) return;
+        const models = payload?.inventory?.models;
+        if (!models || typeof models !== "object") {
+          setModelTestStatus({});
+          return;
+        }
+        const next: Record<string, "ok" | "error" | "quota"> = {};
+        for (const [modelId, raw] of Object.entries(models as Record<string, unknown>)) {
+          if (!raw || typeof raw !== "object") continue;
+          const state = (raw as Record<string, unknown>).state;
+          if (state === "available") next[modelId] = "ok";
+          else if (state === "rate_limited" || state === "quota_exhausted") next[modelId] = "quota";
+          else if (typeof state === "string") next[modelId] = "error";
+        }
+        setModelTestStatus(next);
+      } catch {
+        if (!cancelled) setModelTestStatus({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [providerId, providerNodeId, selectedConnectionId, selectedConnectionProvider]);
 
   const saveModelCompatFlags = async (modelId: string, patch: ModelCompatSavePatch) => {
     setCompatSavingModelId(modelId);
@@ -319,7 +372,16 @@ export function useModelVisibilityHandlers({
         notify.error(
           extractApiErrorMessage(data, providerText(t, "modelTestFailed", "Model test failed"))
         );
-        setModelTestStatus((prev) => ({ ...prev, [modelId]: "error" }));
+        const persistentState =
+          typeof data?.availabilityState === "string" ? data.availabilityState : "";
+        const quotaBlocked =
+          data?.isQuota === true ||
+          persistentState === "quota_exhausted" ||
+          persistentState === "rate_limited";
+        setModelTestStatus((prev) => ({
+          ...prev,
+          [modelId]: quotaBlocked ? "quota" : "error",
+        }));
       }
     } catch (err) {
       notify.error(providerText(t, "modelTestNetworkError", "Network error testing model"));

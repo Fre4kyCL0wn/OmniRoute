@@ -43,12 +43,13 @@ function record(): ProviderObservationRecord {
 }
 
 test("F3.3E: only curated unattended no-auth providers enter the autonomous pool", () => {
-  assert.equal(isAutoComboNoAuthProvider("opencode"), true);
+  assert.equal(isAutoComboNoAuthProvider("opencode"), false);
+  assert.equal(isAutoComboNoAuthProvider("opencode", { bypassAllowlist: true }), true);
   assert.equal(isAutoComboNoAuthProvider("duckduckgo-web"), false);
   assert.equal(isAutoComboNoAuthProvider("cloudflare-playground"), false);
 });
 
-test("F3.3E: synthetic OpenCode route is zero-cost after a real compatibility PASS", () => {
+test("F3.3E: non-allowlisted OpenCode stays out of strict zero-cost even after compatibility PASS", () => {
   const evidence = resolveObservedModelEvidence(
     MODEL,
     {
@@ -74,13 +75,14 @@ test("F3.3E: synthetic OpenCode route is zero-cost after a real compatibility PA
     },
     Date.parse(NOW)
   );
-  assert.equal(evidence.freeEvidenceSource, "curated-noauth-provider");
+  assert.equal(evidence.keylessZeroCost, false);
+  assert.equal(evidence.freeEvidenceSource, null);
   assert.equal(evidence.connectionSafeForZeroCost, true);
-  assert.equal(evidence.strictZeroCostEligible, true);
-  assert.equal(evidence.strictZeroCostReason, "eligible-keyless");
+  assert.equal(evidence.strictZeroCostEligible, false);
+  assert.equal(evidence.strictZeroCostReason, "model-free-unknown");
 });
 
-test("F3.3E: keyless OpenCode is safe to probe before compatibility is known", () => {
+test("F3.3E: non-allowlisted OpenCode is not safe to probe autonomously", () => {
   const evidence = resolveObservedModelEvidence(
     MODEL,
     {
@@ -94,9 +96,9 @@ test("F3.3E: keyless OpenCode is safe to probe before compatibility is known", (
     null,
     Date.parse(NOW)
   );
-  assert.equal(evidence.keylessZeroCost, true);
+  assert.equal(evidence.keylessZeroCost, false);
   assert.equal(evidence.claudeCodeEligible, null);
-  assert.equal(isZeroCostSafeForCompatibilityProbe(evidence), true);
+  assert.equal(isZeroCostSafeForCompatibilityProbe(evidence), false);
 });
 
 test("F3.3E: public catalog models are not keyless unless curated as keyless free", () => {
@@ -120,7 +122,7 @@ test("F3.3E: public catalog models are not keyless unless curated as keyless fre
   assert.equal(isZeroCostSafeForCompatibilityProbe(evidence), false);
 });
 
-test("F3.3E: public OpenCode catalog refresh persists observation only", async () => {
+test("F3.3E: non-allowlisted OpenCode is not refreshed for autonomous enrollment", async () => {
   let saved: ProviderObservationInventory | null = null;
   const inventory = await refreshNoAuthProviderObservations("opencode", {
     fetchCatalog: async () =>
@@ -131,8 +133,6 @@ test("F3.3E: public OpenCode catalog refresh persists observation only", async (
     },
     now: () => NOW,
   });
-  assert.equal(inventory?.refreshStatus, "ok");
-  assert.equal(inventory?.models[0]?.providerModelId, MODEL);
-  assert.equal(inventory?.models[0]?.currentlyObserved, true);
-  assert.equal(saved?.connectionId, SYNTHETIC_NOAUTH_CONNECTION_ID);
+  assert.equal(inventory, null);
+  assert.equal(saved, null);
 });

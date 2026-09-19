@@ -30,6 +30,8 @@ import type { AutoVariant } from "./autoPrefix";
 import { buildFamilyCandidateFilter, type ModelFamily } from "./modelFamily";
 import { getHiddenModelsByProvider } from "@/models";
 import { getSyncedAvailableModelsByConnection, getCustomModels } from "@/lib/db/models";
+import { getModelAvailabilityInventory } from "@/lib/db/modelAvailability";
+import { isPersistedModelAvailabilityRoutable } from "@/lib/modelAvailability/state";
 import { filterPaidOnlyCandidates } from "./paidModelFilter";
 import { filterModelExposureCandidates } from "./modelExposureFilter";
 import {
@@ -678,6 +680,12 @@ export async function prepareVirtualAutoComboInputs(
       getSyncedAvailableModelsByConnection(providerId),
       getCustomModels(providerId),
     ]);
+    const availabilityByConnection = new Map(
+      providerConnections.map((connection) => [
+        connection.id,
+        getModelAvailabilityInventory(connection.id),
+      ])
+    );
     const userVisibleIds = new Set<string>();
     for (const models of Object.values(syncedByConnection)) {
       for (const m of models) if (m.id && !hiddenModels?.has(m.id)) userVisibleIds.add(m.id);
@@ -699,6 +707,10 @@ export async function prepareVirtualAutoComboInputs(
       const allowedConnectionIds = providerConnections
         .filter((conn) => {
           if (isModelExcludedByConnection(modelId, conn.providerSpecificData)) return false;
+          const availability = availabilityByConnection.get(conn.id);
+          const availabilityRecord =
+            availability?.providerId === providerId ? availability.models[modelId] : undefined;
+          if (!isPersistedModelAvailabilityRoutable(availabilityRecord)) return false;
           if (hasUserModels) {
             // User-synced models are scoped to the connections that carry them;
             // custom models are provider-wide like registry models.

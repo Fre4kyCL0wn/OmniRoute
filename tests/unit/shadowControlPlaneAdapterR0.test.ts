@@ -737,7 +737,7 @@ test("R4.5a: exact-route runtime state rejects only the locked model on a shared
   );
 });
 
-test("R4.7 no-auth native persistence rehydrates missing connection pin as synthetic noauth", () => {
+test("R4.7 non-allowlisted no-auth provider with missing pin remains fail-closed", () => {
   const state = mapComboToCurrentComboState({
     id: "managed-noauth",
     name: "jarvis-managed/free-coding",
@@ -747,7 +747,60 @@ test("R4.7 no-auth native persistence rehydrates missing connection pin as synth
   });
   assert.equal(state.members[0]?.providerId, "opencode");
   assert.equal(state.members[0]?.model, "big-pickle");
+  assert.equal(state.members[0]?.connectionId, "unspecified-connection");
+});
+
+test("R4.7 legacy Jarvis-owned OpenCode member rehydrates noauth only for migration", () => {
+  const logicalId = buildManagedComboLogicalId("free-coding");
+  const member = {
+    routeId: "opencode/big-pickle",
+    providerId: "opencode",
+    connectionId: "noauth",
+    model: "big-pickle",
+  };
+  const fingerprint = computeEvidenceFingerprint({
+    members: [member],
+    strategy: "priority",
+    policyMode: "strict_zero_cost",
+    config: {},
+  });
+  const state = mapComboToCurrentComboState({
+    id: "managed-noauth-legacy",
+    name: "jarvis-managed/free-coding",
+    strategy: "priority",
+    models: [{ kind: "model", providerId: "opencode", model: "opencode/big-pickle", weight: 100 }],
+    config: {
+      jarvisManaged: {
+        schemaVersion: 1,
+        logicalId,
+        policyMode: "strict_zero_cost",
+        lastAppliedFingerprint: fingerprint,
+        lastAppliedAt: "2026-09-19T00:00:00.000Z",
+      },
+    },
+  });
   assert.equal(state.members[0]?.connectionId, "noauth");
+  assert.equal(state.actualFingerprint, fingerprint);
+  assert.equal(state.ownership?.lastAppliedFingerprint, fingerprint);
+});
+
+test("R4.7 foreign OpenCode combo never receives legacy noauth rehydration", () => {
+  const state = mapComboToCurrentComboState({
+    id: "foreign-opencode",
+    name: "foreign",
+    strategy: "priority",
+    models: [{ kind: "model", providerId: "opencode", model: "opencode/big-pickle", weight: 100 }],
+    config: {
+      jarvisManaged: {
+        schemaVersion: 1,
+        logicalId: buildManagedComboLogicalId("other-purpose"),
+        policyMode: "strict_zero_cost",
+        lastAppliedFingerprint: "foreign",
+        lastAppliedAt: "2026-09-19T00:00:00.000Z",
+      },
+    },
+  });
+  assert.equal(state.members[0]?.connectionId, "unspecified-connection");
 });
 
 test("R4.7 missing connection pin on non-noauth provider remains fail-closed sentinel", () => {

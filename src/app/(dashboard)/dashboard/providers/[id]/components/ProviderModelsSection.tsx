@@ -426,6 +426,8 @@ export default function ProviderModelsSection({
   const modelsWithVisibility = models.map((model) => ({
     ...model,
     isHidden: effectiveModelHidden(model.id),
+    operationallyBlocked:
+      modelTestStatus[model.id] === "error" || modelTestStatus[model.id] === "quota",
     isFree: isFreeModel(providerId, { id: model.id, isFree: (model as any).isFree }),
   }));
   const filteredModels = modelsWithVisibility.filter((model) => {
@@ -438,8 +440,8 @@ export default function ProviderModelsSection({
       visibilityFilter === "all"
         ? true
         : visibilityFilter === "visible"
-          ? !model.isHidden
-          : model.isHidden;
+          ? !model.isHidden && !model.operationallyBlocked
+          : model.isHidden || model.operationallyBlocked;
     const matchesFreeFilter =
       freeFilter === "all" ? true : freeFilter === "free" ? model.isFree : !model.isFree;
     return matchesQuery && matchesVisibility && matchesFreeFilter;
@@ -447,8 +449,12 @@ export default function ProviderModelsSection({
   const displayModels = sortFreeFirst
     ? sortModelsFreeFirst(filteredModels, { isFree: (m) => m.isFree, key: (m) => m.id })
     : filteredModels;
-  const activeCount = modelsWithVisibility.filter((m) => !m.isHidden).length;
-  const hiddenFilteredCount = filteredModels.filter((m) => m.isHidden).length;
+  const activeCount = modelsWithVisibility.filter(
+    (m) => !m.isHidden && !m.operationallyBlocked
+  ).length;
+  const hiddenFilteredCount = filteredModels.filter(
+    (m) => m.isHidden || m.operationallyBlocked
+  ).length;
   const visibleFilteredCount = filteredModels.length - hiddenFilteredCount;
   const testAllTargets = filteredModels
     .filter((m) => !m.isHidden)
