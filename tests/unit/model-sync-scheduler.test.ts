@@ -281,18 +281,24 @@ test("runtime launchers publish the actual internal listener scheme", () => {
   assert.match(standalone, /OMNIROUTE_INTERNAL_SCHEME\s*=\s*tlsOptions\s*\?\s*["']https["']/);
 });
 
-test("initCloudSync: startup awaits model sync before starting immediate registry jobs", () => {
+test("initCloudSync: R47 starts only after the non-blocking startup model sync settles", () => {
   const filePath = path.join(process.cwd(), "src/lib/initCloudSync.ts");
   const source = fs.readFileSync(filePath, "utf8");
 
-  const syncIndex = source.indexOf("await runModelSyncCycleOnce()");
-  const schedulerIndex = source.indexOf(
-    "startModelSyncScheduler(undefined, undefined, { runStartupCycle: false })"
-  );
+  const schedulerIndex = source.indexOf("const initialModelSync = startModelSyncScheduler()");
   const registryIndex = source.indexOf("await registry.startAll()");
-  assert.ok(syncIndex >= 0, "bootstrap must await the initial model sync");
-  assert.ok(schedulerIndex > syncIndex, "periodic scheduler must start after the awaited sync");
-  assert.ok(registryIndex > schedulerIndex, "R47 registry jobs must start only after model sync");
+  const deferredIndex = source.indexOf("initialModelSync.then(startJarvisReconcile");
+  const r47StartIndex = source.indexOf("registry.start(JARVIS_FREE_CODING_RECONCILE_JOB_ID)");
+  assert.ok(schedulerIndex >= 0, "bootstrap must capture startup model-sync completion");
+  assert.ok(
+    registryIndex > schedulerIndex,
+    "independent jobs may start while model sync is pending"
+  );
+  assert.ok(r47StartIndex > registryIndex, "R47 start must be outside the immediate startAll path");
+  assert.ok(
+    deferredIndex > r47StartIndex,
+    "R47 start callback must be attached to model-sync completion"
+  );
 });
 
 test("cloud sync bootstrap is wired to server startup, not app layout imports", () => {
@@ -329,14 +335,17 @@ test("initCloudSync skips auto initialization during build and test processes un
   );
 });
 
-test("modelSyncScheduler can skip its delayed startup cycle after an awaited bootstrap sync", async () => {
+test("modelSyncScheduler exposes startup-cycle completion without blocking its caller", async () => {
   const timers = installTimerStubs();
   try {
-    const scheduler = await loadScheduler("skip-delayed-startup");
-    scheduler.startModelSyncScheduler("http://127.0.0.1:7777", 10_000, { runStartupCycle: false });
-    assert.equal(timers.timeouts.length, 0);
+    const scheduler = await loadScheduler("startup-completion-promise");
+    const startup = scheduler.startModelSyncScheduler("http://127.0.0.1:7777", 10_000);
+    assert.equal(timers.timeouts.length, 1);
+    assert.equal(timers.timeouts[0].ms, 5000);
     assert.equal(timers.intervals.length, 1);
     assert.equal(timers.intervals[0].ms, 10_000);
+    await timers.timeouts[0].fn();
+    await startup;
     scheduler.stopModelSyncScheduler();
   } finally {
     timers.restore();

@@ -117,6 +117,7 @@ const globalState = globalThis as typeof globalThis & {
 };
 
 let schedulerTimer: NodeJS.Timeout | null = null;
+let startupCyclePromise: Promise<void> | null = null;
 let isRunning = false;
 let internalAuthToken: string | null = null;
 
@@ -269,31 +270,18 @@ async function runSyncCycle(apiBaseUrl: string): Promise<void> {
   }
 }
 
-/** Run one bounded model-sync cycle now and wait for it to finish. */
-export async function runModelSyncCycleOnce(
-  apiBaseUrl = getModelSyncInternalBaseUrl()
-): Promise<void> {
-  await runSyncCycle(resolveModelSyncInternalBaseUrl(apiBaseUrl));
-}
-
-export interface StartModelSyncSchedulerOptions {
-  /** Default true. Disable when the caller already awaited runModelSyncCycleOnce(). */
-  runStartupCycle?: boolean;
-}
-
 /**
- * Start the model sync scheduler.
- * @param apiBaseUrl — internal base URL to call OmniRoute's own API
- * @param intervalMs — sync interval in milliseconds (default: 24h)
+ * Start the model sync scheduler and return a promise that settles after the
+ * delayed startup cycle finishes. Callers may use that promise to order jobs
+ * that depend on a refreshed provider catalog without blocking server startup.
  */
 export function startModelSyncScheduler(
   apiBaseUrl = getModelSyncInternalBaseUrl(),
-  intervalMs = DEFAULT_INTERVAL_MS,
-  options: StartModelSyncSchedulerOptions = {}
-): void {
+  intervalMs = DEFAULT_INTERVAL_MS
+): Promise<void> {
   if (schedulerTimer) {
     console.log("[ModelSync] Scheduler already running — skipping start");
-    return;
+    return startupCyclePromise ?? Promise.resolve();
   }
 
   // Read MODEL_SYNC_INTERVAL_HOURS env override
@@ -304,13 +292,18 @@ export function startModelSyncScheduler(
 
   console.log(`[ModelSync] Scheduler started — interval: ${effectiveIntervalMs / 3_600_000}h`);
 
-  // Default callers retain the staggered startup cycle. The server bootstrap
-  // awaits one explicit cycle first, then disables this duplicate so R47 cannot
-  // run against an empty/stale catalog during process startup.
-  if (options.runStartupCycle !== false) {
-    const startupDelay = setTimeout(() => runSyncCycle(trustedApiBaseUrl), 5_000);
+  // Run once after startup congestion clears. Expose completion so dependent
+  // jobs (notably Jarvis R47) can start only after the catalog refresh without
+  // awaiting self-HTTP from Next instrumentation.
+  startupCyclePromise = new Promise<void>((resolve) => {
+    const startupDelay = setTimeout(() => {
+      void runSyncCycle(trustedApiBaseUrl).then(resolve, (error) => {
+        console.warn("[ModelSync] Startup cycle failed:", (error as Error).message);
+        resolve();
+      });
+    }, 5_000);
     startupDelay.unref?.();
-  }
+  });
 
   // Codex-only: revalidate catalog only on first-start or app upgrade (not every boot).
   void import("./codexCatalogRevalidation")
@@ -324,6 +317,7 @@ export function startModelSyncScheduler(
   // Then run on the regular interval
   schedulerTimer = setInterval(() => runSyncCycle(trustedApiBaseUrl), effectiveIntervalMs);
   schedulerTimer.unref?.();
+  return startupCyclePromise;
 }
 
 /**

@@ -1,14 +1,14 @@
 import initializeCloudSync from "@/shared/services/initializeCloudSync";
-import {
-  runModelSyncCycleOnce,
-  startModelSyncScheduler,
-} from "@/shared/services/modelSyncScheduler";
+import { startModelSyncScheduler } from "@/shared/services/modelSyncScheduler";
 import { isAutomatedTestProcess } from "@/shared/utils/testProcess";
 import { getJobRegistry } from "@/lib/jobRegistry";
 import { registerBudgetResetJob } from "@/lib/jobs/budgetResetJob";
 import { registerTokenHealthCheck } from "@/lib/jobs/tokenHealthCheckJob";
 import { registerLogExportJob } from "@/lib/jobs/logExportJob";
-import { registerJarvisManagedFreeCodingReconcileJob } from "@/lib/jobs/jarvisManagedFreeCodingReconcileJob";
+import {
+  JARVIS_FREE_CODING_RECONCILE_JOB_ID,
+  registerJarvisManagedFreeCodingReconcileJob,
+} from "@/lib/jobs/jarvisManagedFreeCodingReconcileJob";
 import { registerModelAvailabilityReprobeJob } from "@/lib/jobs/modelAvailabilityReprobeJob";
 import { backfillVolcPlanAutoSync } from "@/lib/providers/volcPlanAutoSyncBackfill";
 
@@ -40,24 +40,32 @@ export async function ensureCloudSyncInitialized() {
       await initializeCloudSync();
       await backfillVolcPlanAutoSync();
 
-      // R47's interval job runs immediately when JobRegistry starts. Complete one
-      // upstream model sync first so autonomous reconciliation never evaluates an
-      // empty pre-sync catalog and disables the managed free pool on boot.
-      await runModelSyncCycleOnce();
-      startModelSyncScheduler(undefined, undefined, { runStartupCycle: false });
+      const initialModelSync = startModelSyncScheduler();
 
-      // startAll() runs each interval job's first tick synchronously, so it has to
-      // come after initializeCloudSync(). The old wiring got that ordering two
-      // different ways: the budget reset was started right here, and the health
-      // check's first sweep sat behind a 10s timer. Awaiting the init is a firmer
-      // guarantee than the timer was.
+      // startAll() runs interval jobs immediately. Register the jobs that do not
+      // depend on a freshly synchronized model catalog, then let startup return so
+      // Next can serve the scheduler's internal sync requests. R47 is registered
+      // and started only after that first sync settles.
       const registry = getJobRegistry();
       registerBudgetResetJob(registry);
       registerTokenHealthCheck(registry);
       registerLogExportJob(registry);
-      registerJarvisManagedFreeCodingReconcileJob(registry);
       registerModelAvailabilityReprobeJob(registry);
       await registry.startAll();
+
+      const startJarvisReconcile = () => {
+        try {
+          if (registerJarvisManagedFreeCodingReconcileJob(registry)) {
+            registry.start(JARVIS_FREE_CODING_RECONCILE_JOB_ID);
+          }
+        } catch (error) {
+          console.error(
+            "[ServerInit] Failed to start Jarvis reconciliation after model sync:",
+            error
+          );
+        }
+      };
+      void initialModelSync.then(startJarvisReconcile, startJarvisReconcile);
 
       initialized = true;
     } catch (error) {
