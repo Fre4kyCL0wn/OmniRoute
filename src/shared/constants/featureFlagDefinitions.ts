@@ -619,6 +619,19 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     warningLevel: "caution",
   },
 
+  {
+    key: "OMNIROUTE_JARVIS_INTENT_ROUTING_ENABLED",
+    label: "Jarvis Intent-Aware Routing",
+    description:
+      "Route tool-free jarvis-auto requests into live-catalog-backed free reasoning, vision, multimodal, or chat pools while preserving the compatibility-gated managed pool for coding and tool use.",
+    descriptionI18nKey: "featureFlagOmnirouteJarvisIntentRoutingEnabledDescription",
+    category: "runtime",
+    defaultValue: "false",
+    type: "boolean",
+    requiresRestart: false,
+    warningLevel: "caution",
+  },
+
   // ──────────────── Health (3) ────────────────
   {
     key: "OMNIROUTE_DISABLE_LOCAL_HEALTHCHECK",

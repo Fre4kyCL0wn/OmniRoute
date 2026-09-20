@@ -74,8 +74,18 @@ export function isClientAbortError(err) {
  *   "uncaughtException" / "unhandledRejection"); absent/empty for rejections.
  * @returns {boolean} true => swallow (log only), false => re-throw / let crash.
  */
+function isRecoverableProcessTransportError(err) {
+  if (!err || typeof err !== "object") return false;
+  const e = /** @type {NodeJS.ErrnoException} */ (err);
+  // The direct-response-start bound is an expected upstream transport failure.
+  // Request/combo handling already converts it into a 504/failover decision; if
+  // a duplicate rejection escapes a streaming branch, it must not kill the
+  // entire OmniRoute process. Keep this allowlist deliberately narrow.
+  return e.code === "DIRECT_RESPONSE_START_TIMEOUT";
+}
+
 export function shouldSwallowUncaught(err, origin) {
-  if (!isClientAbortError(err)) return false;
+  if (!isClientAbortError(err) && !isRecoverableProcessTransportError(err)) return false;
   // Only swallow when the origin matches what the guard installed for. If some
   // other subsystem raised it (e.g. a deliberate `throw` in a domain), keep the
   // existing crash semantics.
@@ -131,7 +141,7 @@ export function installProcessCrashGuard(log) {
 
   process.on("uncaughtException", (err, origin) => {
     if (shouldSwallowUncaught(err, origin)) {
-      logger("warn", "[server] swallowed client-abort uncaughtException:", err?.message ?? err);
+      logger("warn", "[server] swallowed recoverable uncaughtException:", err?.message ?? err);
       return;
     }
     throw err;
@@ -141,7 +151,7 @@ export function installProcessCrashGuard(log) {
     if (shouldSwallowUncaught(reason, "unhandledRejection")) {
       logger(
         "warn",
-        "[server] swallowed client-abort unhandledRejection:",
+        "[server] swallowed recoverable unhandledRejection:",
         reason?.message ?? reason
       );
       return;

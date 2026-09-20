@@ -139,6 +139,75 @@ export function getParamFilterConfig(provider: string): ProviderParamFilter | nu
 }
 
 /**
+ * Resolve the final parameter-policy view after provider and model overrides.
+ * This mirrors request-time application order in paramSupport.ts:
+ * provider block -> provider allow -> model block -> model allow.
+ * Keys are normalised only for policy comparison; persisted/request keys remain untouched.
+ */
+export function resolveEffectiveParamFilter(
+  config: ProviderParamFilter | null | undefined,
+  model?: string | null
+): { blocked: string[]; allowed: string[] } {
+  if (!config) return { blocked: [], allowed: [] };
+
+  const blocked = new Set<string>();
+  const allowed = new Set<string>();
+  const normalize = (value: string) => value.trim().toLowerCase();
+  const applyBlock = (values: readonly string[] | undefined) => {
+    for (const raw of values ?? []) {
+      const key = normalize(raw);
+      if (!key) continue;
+      blocked.add(key);
+      allowed.delete(key);
+    }
+  };
+  const applyAllow = (values: readonly string[] | undefined) => {
+    for (const raw of values ?? []) {
+      const key = normalize(raw);
+      if (!key) continue;
+      allowed.add(key);
+      blocked.delete(key);
+    }
+  };
+
+  applyBlock(config.block);
+  applyAllow(config.allow);
+  const modelCfg = model ? config.models?.[model] : undefined;
+  applyBlock(modelCfg?.block);
+  applyAllow(modelCfg?.allow);
+
+  return { blocked: [...blocked], allowed: [...allowed] };
+}
+
+/** True when the final DB-backed request policy strips `paramName` for this route. */
+export function isParamEffectivelyBlocked(
+  provider: string,
+  model: string | null | undefined,
+  paramName: string
+): boolean {
+  const key = paramName.trim().toLowerCase();
+  if (!key) return false;
+  return resolveEffectiveParamFilter(getParamFilterConfig(provider), model).blocked.includes(key);
+}
+
+/**
+ * Remove parameters that runtime policy has learned/configured as unsupported.
+ * `null` remains unknown rather than becoming an empty capability set.
+ */
+export function filterSupportedParametersForRoute(
+  provider: string,
+  model: string | null | undefined,
+  supported: readonly string[] | null
+): string[] | null {
+  if (supported === null) return null;
+  const blocked = new Set(
+    resolveEffectiveParamFilter(getParamFilterConfig(provider), model).blocked
+  );
+  if (blocked.size === 0) return [...supported];
+  return supported.filter((param) => !blocked.has(param.trim().toLowerCase()));
+}
+
+/**
  * Upsert the entire param filter config for a provider.
  * Invalidates the in-memory cache.
  */

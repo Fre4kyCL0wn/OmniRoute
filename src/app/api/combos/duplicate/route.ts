@@ -5,12 +5,10 @@ import { normalizeComboModels } from "@/lib/combos/steps";
 import { duplicateAutoComboSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import {
-  AUTO_FAMILY_IDS,
-  resolveBuiltinAutoSpec,
+  createBuiltinAutoCombo,
+  prepareBuiltinAutoComboInputs,
 } from "@omniroute/open-sse/services/autoCombo/builtinCatalog";
-import { AutoVariant } from "@omniroute/open-sse/services/autoCombo/autoPrefix";
-import { AutoComboSpec } from "@omniroute/open-sse/services/autoCombo/virtualFactory";
-import { MODEL_FAMILIES, ModelFamily } from "@omniroute/open-sse/services/autoCombo/modelFamily";
+import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 
 // POST /api/combos/duplicate - Resolve an auto-combo into a static combo snapshot.
 // Takes an auto/* template name, resolves its candidate pool using the same logic as
@@ -42,55 +40,50 @@ export async function POST(request: Request) {
   const { name, strategy } = validation.data;
 
   try {
-    const { createVirtualAutoCombo } =
-      await import("@omniroute/open-sse/services/autoCombo/virtualFactory");
+    // Resolve through the SAME entry point the catalog listing uses
+    // (`/api/combos/auto` → `createBuiltinAutoCombo`). This route used to
+    // re-implement the resolution and drifted from it: it could not handle the
+    // bare `auto` id, it rejected advertised template ids whose variant is
+    // undefined (`auto/chat`, `auto/best-chat`, `auto/pro-chat`) with 422, and
+    // it only honoured the `free` tier overlay while ignoring `subscription`
+    // and `thrifty` — so the snapshot silently had a different pool than the
+    // live route the operator clicked "duplicate" on.
+    //
+    // `auto` has no slash; every other id is `auto/<suffix>`.
+    const suffix = name.startsWith("auto/") ? name.slice("auto/".length) : "";
 
-    // Resolve the variant/spec using the same logic as builtinCatalog.
-    const suffix = name.slice("auto/".length);
-    const resolved = resolveBuiltinAutoSpec(name, suffix);
+    // includeResolvedCapabilities (set by prepareBuiltinAutoComboInputs) is
+    // required so computeSnapshotWeights can differentiate candidates by
+    // vision/reasoning capabilities at snapshot time.
+    const prepared = await prepareBuiltinAutoComboInputs();
 
-    let variant: AutoVariant | undefined;
-    let spec: AutoComboSpec | undefined;
-
-    if ("category" in resolved) {
-      // Category/tier path (e.g. auto/best-vision → { category: "vision" })
-      spec = {
-        category: resolved.category,
-        ...(resolved.tier ? { tier: resolved.tier } : {}),
-      };
-    } else if (resolved.variant !== undefined) {
-      // Variant path (e.g. auto/best-coding → variant "coding")
-      variant = resolved.variant ?? undefined;
-      spec = name === "auto/best-free" ? { tier: "free" as const } : undefined;
-    }
-    // Family suffixes (auto/glm, etc.) — resolveBuiltinAutoSpec returns
-    // { variant: undefined } for them, so fall through to MODEL_FAMILIES check.
-    if (!variant && !spec) {
-      const candidate = suffix as ModelFamily;
-      if (MODEL_FAMILIES.includes(candidate)) {
-        spec = { family: candidate };
+    let virtualCombo;
+    try {
+      if (name === "auto") {
+        // The unconstrained route. `createBuiltinAutoCombo` only speaks
+        // `auto/<suffix>` (it is the chat handler's model-string resolver), but
+        // the catalog lists bare `auto` as a real, active route — so materialize
+        // it here the same way the listing does: no variant, no spec.
+        const { createVirtualAutoComboFromPrepared } =
+          await import("@omniroute/open-sse/services/autoCombo/virtualFactory");
+        virtualCombo = await createVirtualAutoComboFromPrepared(prepared, undefined, undefined);
+      } else {
+        virtualCombo = await createBuiltinAutoCombo(name, suffix, prepared);
       }
+    } catch (resolveError) {
+      // The materializer's only input-driven failure is an unrecognized id;
+      // report that as a client error instead of a 500.
+      if (
+        resolveError instanceof Error &&
+        resolveError.message.startsWith("Unknown built-in auto combo")
+      ) {
+        return NextResponse.json(
+          { error: `Unknown auto-combo template: "${name}"` },
+          { status: 422 }
+        );
+      }
+      throw resolveError;
     }
-
-    // Reject unknown templates early instead of silently passing bad data downstream.
-    if (!variant && !spec) {
-      return NextResponse.json(
-        { error: `Unknown auto-combo template: "${name}"` },
-        { status: 422 }
-      );
-    }
-
-    // Materialize the virtual auto-combo to get resolved models.
-    // includeResolvedCapabilities is required so computeSnapshotWeights can
-    // differentiate candidates by vision/reasoning capabilities at snapshot time.
-    const { prepareVirtualAutoComboInputs, createVirtualAutoComboFromPrepared } =
-      await import("@omniroute/open-sse/services/autoCombo/virtualFactory");
-
-    const prepared = await prepareVirtualAutoComboInputs({
-      includeResolvedCapabilities: true,
-    });
-
-    const virtualCombo = await createVirtualAutoComboFromPrepared(prepared, variant, spec);
 
     if (!Array.isArray(virtualCombo.models) || virtualCombo.models.length === 0) {
       return NextResponse.json(
@@ -170,10 +163,8 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error: "Failed to duplicate auto-combo",
-        details:
-          typeof error === "object" && error !== null && "message" in error
-            ? String(error.message)
-            : String(error),
+        // Hard Rule #12 — never hand a raw upstream/runtime message to a client.
+        details: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
       },
       { status: 500 }
     );

@@ -153,6 +153,19 @@ export function isToolBearingRequest(body: Body): boolean {
   return body.tool_choice !== "none";
 }
 
+async function isRetryableToolTargetResponse(response: Response): Promise<boolean> {
+  if ([402, 408, 429, 500, 502, 503, 504].includes(response.status)) return true;
+  if (response.status !== 400) return false;
+
+  const text = await response
+    .clone()
+    .text()
+    .catch(() => "");
+  return /\bmodel\b.{0,80}\b(?:is\s+)?(?:unavailable|not\s+available|retired|deprecated)\b/i.test(
+    text
+  );
+}
+
 type Sentinel = { __timeout?: true; __error?: unknown };
 
 // Resolve a Response (or sentinel) within ms; the loser keeps running but is ignored.
@@ -363,15 +376,50 @@ export async function handleFusionChat({
   // Tool-bearing requests get no value from panel synthesis — panel members
   // would answer with no tool access (degraded prose), and the judge's
   // synthesis directive steers it away from emitting a tool call even though
-  // it technically still receives `tools`. Skip straight to a single model
-  // with the full, unmodified body (tools/tool_choice intact) so agentic
-  // clients get a real tool-call decision (#6771).
+  // it technically still receives `tools`. Route the full, unmodified body
+  // through one model at a time so agentic clients get a real tool-call
+  // decision, but retain bounded same-request failover when the preferred
+  // model is temporarily unavailable (#6771).
   if (isToolBearingRequest(body)) {
+    const firstTarget: FusionModel =
+      judgeTarget && getFusionModelString(judgeTarget) === judge ? judgeTarget : judge;
+    const candidates: FusionModel[] = [];
+    const seen = new Set<string>();
+
+    for (const target of [firstTarget, ...panelToDispatch]) {
+      const model = getFusionModelString(target);
+      if (seen.has(model)) continue;
+      seen.add(model);
+      candidates.push(target);
+    }
+
     log.info(
       "FUSION",
-      `Combo "${comboName ?? ""}" received a tool-bearing request — bypassing panel synthesis, routing directly to ${judge} with tools intact`
+      `Combo "${comboName ?? ""}" received a tool-bearing request — bypassing panel synthesis, routing with tools intact via ${candidates
+        .map(getFusionModelString)
+        .join(" → ")}`
     );
-    return handleSingleModel(body, judge);
+
+    let lastResponse: Response | null = null;
+    for (let i = 0; i < candidates.length; i++) {
+      const target = candidates[i];
+      const model = getFusionModelString(target);
+      const response = await dispatchFusionModel(handleSingleModel, body, target);
+      lastResponse = response;
+
+      if (response.ok) return response;
+      const retryable = await isRetryableToolTargetResponse(response);
+      if (!retryable || i === candidates.length - 1) {
+        return response;
+      }
+
+      log.warn(
+        "FUSION",
+        `Tool-bearing target ${model} failed with retryable status ${response.status} — trying ${getFusionModelString(candidates[i + 1])}`
+      );
+    }
+
+    return lastResponse ?? errorResponse(503, "No fusion tool-bearing target available");
   }
 
   const t0 = Date.now();

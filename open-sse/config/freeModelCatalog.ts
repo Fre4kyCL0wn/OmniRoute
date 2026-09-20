@@ -177,6 +177,43 @@ export function grantsFreeAccess(freeType: FreeModelFreeType): boolean {
   return FREE_REGIME_TRAITS[freeType].grantsFreeAccess;
 }
 
+/**
+ * Token buckets whose allowance renews on its own — a daily/monthly quota, a
+ * credit that refills, or genuinely uncapped access — as opposed to a one-off
+ * signup credit (`"one-time-credit"`) that runs out and does not come back, or
+ * a regime that grants nothing (`"none"`). Any future bucket is non-recurring
+ * until it is added here on purpose (allowlist, not denylist).
+ */
+const RECURRING_TOKEN_BUCKETS: ReadonlySet<FreeRegimeTokenBucket> = new Set([
+  "steady-monthly",
+  "recurring-credit",
+  "uncapped",
+]);
+
+/**
+ * Stricter sibling of `grantsFreeAccess`: does this regime grant a RECURRING
+ * free allowance (renews daily/monthly, a refilling credit, or genuinely
+ * uncapped) — as opposed to a one-off signup/trial credit that is spent once
+ * and gone?
+ *
+ * `grantsFreeAccess` stays the "any documented free access" predicate every UI
+ * and import consumer already relies on: a trial credit IS free access while it
+ * lasts, and only `discontinued` (retired behind a paid key) is excluded there
+ * — pinned by `free-regime-not-read-by-predicate.test.ts`. Routing / runtime
+ * cost-class decisions that must not treat a spent-and-gone credit as a
+ * sustained free tier read THIS one instead:
+ *   recurring-daily / -monthly / -credit / -uncapped -> true
+ *   keyless (permanently free, no credential, no expiry)             -> true
+ *   one-time-initial (signup / trial credit, first period only)      -> false
+ *   discontinued                                                     -> false
+ * Derived from the regime's `tokenBucket` so a new regime is classified by the
+ * same table the totals already use, not by a hand-kept second list.
+ */
+export function grantsRecurringFreeAccess(freeType: FreeModelFreeType): boolean {
+  const traits = FREE_REGIME_TRAITS[freeType];
+  return traits.grantsFreeAccess && RECURRING_TOKEN_BUCKETS.has(traits.tokenBucket);
+}
+
 /** The regimes whose allowance belongs to `bucket`, derived from the table. */
 export function freeTypesInBucket(bucket: FreeRegimeTokenBucket): Set<FreeModelFreeType> {
   return new Set(

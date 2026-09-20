@@ -20,6 +20,7 @@ import {
   getDisplayModelAlias,
   providerText,
   type CompatModelRow,
+  resolveRowAvailabilityStatus,
 } from "../providerPageHelpers";
 import { ModelVisibilityToolbar } from "./ModelRow";
 import { sortModelsFreeFirst, isFreeModel } from "@/shared/utils/freeModels";
@@ -68,6 +69,11 @@ export interface CompatibleModelsSectionProps {
   togglingModelId?: string | null;
   onTestModel?: (modelId: string, fullModel: string) => Promise<void>;
   modelTestStatus?: Record<string, "ok" | "error" | "quota" | null>;
+  /**
+   * True while the persisted availability inventory is still being fetched.
+   * Rows must render "checking" rather than UNTESTED until it flips to false.
+   */
+  modelAvailabilityLoading?: boolean;
   testingModelId?: string | null;
   onTestAll?: (targets: Array<{ modelId: string; fullModel: string }>) => Promise<void>;
   testingAll?: boolean;
@@ -112,6 +118,7 @@ export default function CompatibleModelsSection({
   togglingModelId,
   onTestModel,
   modelTestStatus,
+  modelAvailabilityLoading,
   testingModelId,
   onTestAll,
   testingAll,
@@ -123,7 +130,7 @@ export default function CompatibleModelsSection({
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
   const [modelFilter, setModelFilter] = useState("");
-  const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("all");
+  const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("visible");
   const [freeFilter, setFreeFilter] = useState<"all" | "free" | "paid">("all");
   const [sortFreeFirst, setSortFreeFirst] = useState(false);
   const notify = useNotificationStore();
@@ -229,12 +236,14 @@ export default function CompatibleModelsSection({
       alias: model.alias,
       source: model.source,
     });
+    const operationallyBlocked =
+      modelTestStatus?.[model.modelId] === "error" || modelTestStatus?.[model.modelId] === "quota";
     const matchesVisibility =
       visibilityFilter === "all"
         ? true
         : visibilityFilter === "visible"
-          ? !model.isHidden
-          : model.isHidden;
+          ? !model.isHidden && !operationallyBlocked
+          : model.isHidden || operationallyBlocked;
     const matchesFreeFilter =
       freeFilter === "all" ? true : freeFilter === "free" ? model.isFree : !model.isFree;
     return matchesQuery && matchesVisibility && matchesFreeFilter;
@@ -242,8 +251,18 @@ export default function CompatibleModelsSection({
   const displayModels = sortFreeFirst
     ? sortModelsFreeFirst(filteredModels, { isFree: (m) => m.isFree, key: (m) => m.modelId })
     : filteredModels;
-  const activeCount = allModels.filter((model) => !model.isHidden).length;
-  const hiddenFilteredCount = filteredModels.filter((model) => model.isHidden).length;
+  const activeCount = allModels.filter(
+    (model) =>
+      !model.isHidden &&
+      modelTestStatus?.[model.modelId] !== "error" &&
+      modelTestStatus?.[model.modelId] !== "quota"
+  ).length;
+  const hiddenFilteredCount = filteredModels.filter(
+    (model) =>
+      model.isHidden ||
+      modelTestStatus?.[model.modelId] === "error" ||
+      modelTestStatus?.[model.modelId] === "quota"
+  ).length;
   const visibleFilteredCount = filteredModels.length - hiddenFilteredCount;
 
   const resolveAlias = useCallback(
@@ -461,7 +480,10 @@ export default function CompatibleModelsSection({
                   onToggleHidden={onToggleHidden}
                   togglingHidden={togglingModelId === modelId}
                   onTestModel={onTestModel}
-                  testStatus={modelTestStatus?.[modelId] || null}
+                  testStatus={resolveRowAvailabilityStatus(
+                    modelTestStatus?.[modelId],
+                    modelAvailabilityLoading
+                  )}
                   testingModel={testingModelId === modelId}
                 />
               );

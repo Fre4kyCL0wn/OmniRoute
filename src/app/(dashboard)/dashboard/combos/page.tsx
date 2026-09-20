@@ -74,6 +74,7 @@ import {
   type SortMethod,
 } from "@/lib/combos/comboSort";
 import type { ComboStep } from "@/lib/combos/steps";
+import { resolveComboConfig, resolveComboSource } from "@/lib/combos/comboSourceBadge";
 import {
   filterCombosByStrategyCategory,
   getStrategyCategory,
@@ -245,10 +246,23 @@ function secondsInputToOptionalMs(value, maxSeconds = 86400) {
   return Math.min(maxSeconds, Math.round(seconds)) * MS_PER_SECOND;
 }
 
+const COMBO_SOURCE_BADGES = {
+  JARVIS_MANAGED: { label: "JARVIS MANAGED", className: "bg-green-500/10 text-green-500" },
+  STATIC_SNAPSHOT: { label: "STATIC SNAPSHOT", className: "bg-amber-500/10 text-amber-500" },
+  MANUAL_LEGACY: {
+    label: "MANUAL / LEGACY",
+    className: "bg-black/5 text-text-muted dark:bg-white/10",
+  },
+};
+
 function sanitizeComboRuntimeConfig(config) {
-  if (!config || typeof config !== "object") return {};
+  // Same reason as the source badge: a persisted config may arrive serialized.
+  // Dropping it to `{}` here would make an edit silently wipe the stored
+  // runtime settings the next time the operator hits save.
+  const resolved = resolveComboConfig(config);
+  if (!resolved) return {};
   return Object.fromEntries(
-    Object.entries(config).filter(
+    Object.entries(resolved).filter(
       ([key, value]) =>
         value !== undefined && value !== null && !LEGACY_COMBO_RESILIENCE_KEYS.has(key)
     )
@@ -1765,6 +1779,11 @@ function ComboCardInner({
   const strategy = combo.strategy || "priority";
   const models = combo.models || [];
   const isDisabled = combo.isActive === false;
+  // Read through `resolveComboSource` rather than off `combo.config` directly:
+  // restored/imported rows can carry the config as a JSON string, and a plain
+  // property read on a string would mislabel a Jarvis-owned combo as manual.
+  const comboSource = resolveComboSource(combo.config);
+  const sourceBadge = COMBO_SOURCE_BADGES[comboSource];
   const t = useTranslations("combos");
   const tc = useTranslations("common");
   const emailsVisible = useEmailPrivacyStore((s) => s.emailsVisible);
@@ -1813,6 +1832,11 @@ function ComboCardInner({
                   {getStrategyLabel(t, strategy)}
                 </span>
               </Tooltip>
+              <span
+                className={`text-[9px] uppercase font-semibold px-1.5 py-0.5 rounded-full ${sourceBadge.className}`}
+              >
+                {sourceBadge.label}
+              </span>
               {hasProxy && (
                 <span
                   className="text-[9px] uppercase font-semibold px-1.5 py-0.5 rounded-full bg-primary/15 text-primary flex items-center gap-0.5"
@@ -2120,7 +2144,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, combo
   const [prevSortComboId, setPrevSortComboId] = useState(combo?.id);
   if (combo?.id !== prevSortComboId) {
     setPrevSortComboId(combo?.id);
-    setSortMethod(normalizeSortMethod(combo?.config?.modelSort?.method));
+    setSortMethod(normalizeSortMethod(resolveComboConfig(combo?.config)?.modelSort?.method));
   }
   const modelsRef = useRef(models);
   const sortMethodRef = useRef<SortMethod>(sortMethod);
@@ -2166,7 +2190,9 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, combo
           );
 
       // Validate persisted enum; tolerate hand-edited DB values.
-      const loadedMethod = normalizeSortMethod(nextCombo?.config?.modelSort?.method);
+      const loadedMethod = normalizeSortMethod(
+        resolveComboConfig(nextCombo?.config)?.modelSort?.method
+      );
       // Generation guard so a stale score fetch can't clobber the next combo.
       const myGen = ++resetSortGenerationRef.current;
       setSortMethod(loadedMethod);

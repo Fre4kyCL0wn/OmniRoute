@@ -10,9 +10,8 @@ import assert from "node:assert/strict";
  * same defect register one rule array — no pipeline changes.
  */
 
-const { applyStatusRestatement, statusRestatementRegistry } = await import(
-  "../../open-sse/config/upstreamStatusRestatement.ts"
-);
+const { applyStatusRestatement, statusRestatementRegistry } =
+  await import("../../open-sse/config/upstreamStatusRestatement.ts");
 
 test("R1: agentrouter 403 + 用户额度不足 → 429 with synthetic Retry-After", () => {
   const out = applyStatusRestatement({
@@ -121,6 +120,53 @@ test("R10: chatCore wires applyStatusRestatement into the providerFailure block"
   assert.match(src, /applyStatusRestatement\(/, "chatCore must call applyStatusRestatement");
   const hookIndex = src.indexOf("applyStatusRestatement(");
   const classifyIndex = src.indexOf("classifyProviderError(statusCode");
-  assert.ok(hookIndex > -1 && classifyIndex > -1 && hookIndex < classifyIndex,
-    "restatement must run BEFORE classifyProviderError so fallback sees the corrected status");
+  assert.ok(
+    hookIndex > -1 && classifyIndex > -1 && hookIndex < classifyIndex,
+    "restatement must run BEFORE classifyProviderError so fallback sees the corrected status"
+  );
+});
+
+test("R11: groq 413 + TPM → 429 with synthetic Retry-After", () => {
+  const out = applyStatusRestatement({
+    provider: "groq",
+    status: 413,
+    message: "Request too large ... on tokens per minute (TPM): Limit 8000, Requested 13299",
+    retryAfterMs: null,
+  });
+  assert.equal(out.status, 429);
+  assert.equal(out.retryAfterMs, 60_000);
+  assert.equal(out.ruleId, "groq-tpm-misstatus");
+});
+
+test("R12: groq 413 + genuine payload too large → 413 (untouched)", () => {
+  const out = applyStatusRestatement({
+    provider: "groq",
+    status: 413,
+    message: "Payload too large",
+    retryAfterMs: null,
+  });
+  assert.equal(out.status, 413);
+  assert.equal(out.ruleId, null);
+});
+
+test("R13: other providers with 'tokens per minute' are untouched", () => {
+  const out = applyStatusRestatement({
+    provider: "openai",
+    status: 413,
+    message: "Request too large ... on tokens per minute (TPM): Limit 8000, Requested 13299",
+    retryAfterMs: null,
+  });
+  assert.equal(out.status, 413);
+  assert.equal(out.ruleId, null);
+});
+
+test("R14: groq 413 + TPM + upstream retryAfterMs wins", () => {
+  const out = applyStatusRestatement({
+    provider: "groq",
+    status: 413,
+    message: "Request too large ... on tokens per minute (TPM): Limit 8000, Requested 13299",
+    retryAfterMs: 5_000,
+  });
+  assert.equal(out.status, 429);
+  assert.equal(out.retryAfterMs, 5_000);
 });

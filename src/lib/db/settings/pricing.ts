@@ -8,8 +8,8 @@ import { invalidateDbCache } from "../readCache";
 import { PROVIDER_ID_TO_ALIAS } from "@omniroute/open-sse/config/providerModels.ts";
 import { type JsonRecord, toRecord } from "./shared";
 
-type PricingModels = Record<string, JsonRecord>;
-type PricingByProvider = Record<string, PricingModels>;
+export type PricingModels = Record<string, JsonRecord>;
+export type PricingByProvider = Record<string, PricingModels>;
 export type PricingSource = "default" | "litellm" | "modelsDev" | "user";
 export type PricingSourceMap = Record<string, Record<string, PricingSource>>;
 
@@ -120,9 +120,21 @@ export async function getPricingWithSources(): Promise<{
   };
 }
 
-export async function getPricingForModel(provider: string, model: string) {
-  const pricing = await getPricing();
-
+/**
+ * Resolve one model's pricing record out of an ALREADY-MERGED pricing map.
+ *
+ * Split out of `getPricingForModel` so callers that need many lookups (the
+ * background availability discovery sweep classifies every synced model of
+ * every connection) can pay for `getPricing()` — four DB namespace reads plus
+ * a merge — exactly once per run instead of once per model, while still
+ * resolving provider aliases and model-id spelling through the very same
+ * rules. Pure: no DB access, no I/O.
+ */
+export function lookupPricingRecord(
+  pricing: PricingByProvider,
+  provider: string,
+  model: string
+): JsonRecord | null {
   const findKeyInsensitive = <T>(
     obj: Record<string, T> | undefined | null,
     key: string
@@ -170,6 +182,11 @@ export async function getPricingForModel(provider: string, model: string) {
   }
 
   return modelPricing || null;
+}
+
+export async function getPricingForModel(provider: string, model: string) {
+  const pricing = await getPricing();
+  return lookupPricingRecord(pricing, provider, model);
 }
 
 export async function updatePricing(pricingData: PricingByProvider) {

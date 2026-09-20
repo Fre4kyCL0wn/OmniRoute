@@ -21,7 +21,7 @@
   },
   "open-sse/config/providers/registry/claude/index.ts": {
     "@typescript-eslint/no-unused-vars": {
-      "count": 7
+      "count": 6
     }
   },
   "open-sse/config/providers/registry/vertex/index.ts": {
@@ -633,11 +633,6 @@
       "count": 1
     }
   },
-  "open-sse/services/tlsClientBase.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    }
-  },
   "open-sse/services/tokenLimitCounter.ts": {
     "@typescript-eslint/no-unused-vars": {
       "count": 1
@@ -1131,11 +1126,6 @@
       "count": 1
     }
   },
-  "src/app/api/combos/duplicate/route.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 2
-    }
-  },
   "src/app/api/compression/compare/verify/route.ts": {
     "no-restricted-imports": {
       "count": 1
@@ -1302,11 +1292,6 @@
   "src/app/api/v1/models/catalog.ts": {
     "@typescript-eslint/no-unused-vars": {
       "count": 10
-    }
-  },
-  "src/app/api/v1/models/catalogCache.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
     }
   },
   "src/app/api/v1/models/catalogOpenrouter.ts": {
@@ -2750,7 +2735,7 @@
   },
   "tests/unit/build/check-licenses.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 5
+      "count": 4
     }
   },
   "tests/unit/bypass-handler.test.ts": {
@@ -2816,11 +2801,6 @@
       "count": 10
     }
   },
-  "tests/unit/chat-helpers.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 13
-    }
-  },
   "tests/unit/chat-rate-limit-body-lock.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
@@ -2859,7 +2839,7 @@
   },
   "tests/unit/chatcore-translation-paths.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 31
+      "count": 30
     }
   },
   "tests/unit/check-docs-symbols.test.ts": {
@@ -3345,7 +3325,7 @@
   },
   "tests/unit/combo-routing-engine.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 268
+      "count": 267
     }
   },
   "tests/unit/combo-same-provider-cascade.test.ts": {
@@ -5364,31 +5344,8 @@
       "count": 1
     }
   },
-  "tests/unit/ui/use-improve-prompt.test.tsx": {
-    "react-hooks/immutability": {
-      "count": 1
-    }
-  },
-  "tests/unit/ui/use-presets.test.tsx": {
-    "react-hooks/immutability": {
-      "count": 1
-    }
-  },
   "tests/unit/ui/use-stream-metrics.test.tsx": {
     "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    }
-  },
-  "tests/unit/ui/use-structured-output.test.tsx": {
-    "react-hooks/immutability": {
-      "count": 1
-    }
-  },
-  "tests/unit/ui/use-tools-builder.test.tsx": {
-    "react-hooks/immutability": {
       "count": 1
     }
   },

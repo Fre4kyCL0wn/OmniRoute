@@ -281,11 +281,24 @@ test("runtime launchers publish the actual internal listener scheme", () => {
   assert.match(standalone, /OMNIROUTE_INTERNAL_SCHEME\s*=\s*tlsOptions\s*\?\s*["']https["']/);
 });
 
-test("initCloudSync: startup initialization also starts model sync scheduler", () => {
+test("initCloudSync: R47 starts only after the non-blocking startup model sync settles", () => {
   const filePath = path.join(process.cwd(), "src/lib/initCloudSync.ts");
   const source = fs.readFileSync(filePath, "utf8");
 
-  assert.match(source, /startModelSyncScheduler\s*\(/);
+  const schedulerIndex = source.indexOf("const initialModelSync = startModelSyncScheduler()");
+  const registryIndex = source.indexOf("await registry.startAll()");
+  const deferredIndex = source.indexOf("initialModelSync.then(startJarvisReconcile");
+  const r47StartIndex = source.indexOf("registry.start(JARVIS_FREE_CODING_RECONCILE_JOB_ID)");
+  assert.ok(schedulerIndex >= 0, "bootstrap must capture startup model-sync completion");
+  assert.ok(
+    registryIndex > schedulerIndex,
+    "independent jobs may start while model sync is pending"
+  );
+  assert.ok(r47StartIndex > registryIndex, "R47 start must be outside the immediate startAll path");
+  assert.ok(
+    deferredIndex > r47StartIndex,
+    "R47 start callback must be attached to model-sync completion"
+  );
 });
 
 test("cloud sync bootstrap is wired to server startup, not app layout imports", () => {
@@ -322,7 +335,24 @@ test("initCloudSync skips auto initialization during build and test processes un
   );
 });
 
-test("modelSyncScheduler starts once, honors env interval and syncs only active autoSync connections", async () => {
+test("modelSyncScheduler exposes startup-cycle completion without blocking its caller", async () => {
+  const timers = installTimerStubs();
+  try {
+    const scheduler = await loadScheduler("startup-completion-promise");
+    const startup = scheduler.startModelSyncScheduler("http://127.0.0.1:7777", 10_000);
+    assert.equal(timers.timeouts.length, 1);
+    assert.equal(timers.timeouts[0].ms, 5000);
+    assert.equal(timers.intervals.length, 1);
+    assert.equal(timers.intervals[0].ms, 10_000);
+    await timers.timeouts[0].fn();
+    await startup;
+    scheduler.stopModelSyncScheduler();
+  } finally {
+    timers.restore();
+  }
+});
+
+test("modelSyncScheduler starts once, honors env interval and syncs active autoSync or autoFetch connections", async () => {
   await providersDb.createProviderConnection({
     provider: "openai",
     authType: "apikey",
@@ -336,6 +366,13 @@ test("modelSyncScheduler starts once, honors env interval and syncs only active 
     name: "Manual Sync",
     apiKey: "sk-manual",
     providerSpecificData: { autoSync: false },
+  });
+  await providersDb.createProviderConnection({
+    provider: "gemini",
+    authType: "apikey",
+    name: "Auto Fetch Models",
+    apiKey: "sk-auto-fetch",
+    providerSpecificData: { autoSync: false, autoFetchModels: true },
   });
   await providersDb.createProviderConnection({
     provider: "anthropic",
@@ -374,9 +411,9 @@ test("modelSyncScheduler starts once, honors env interval and syncs only active 
 
     await timers.timeouts[0].fn();
 
-    assert.equal(fetchCalls.length, 1);
-    assert.match(fetchCalls[0].url, /^http:\/\/127\.0\.0\.1:20128\//);
-    assert.match(fetchCalls[0].url, /\/api\/providers\/.*\/sync-models$/);
+    assert.equal(fetchCalls.length, 2);
+    assert.ok(fetchCalls.every((call) => /^http:\/\/127\.0\.0\.1:20128\//.test(call.url)));
+    assert.ok(fetchCalls.every((call) => /\/api\/providers\/.*\/sync-models$/.test(call.url)));
     assert.equal(fetchCalls[0].options.method, "POST");
     assert.equal(fetchCalls[0].options.redirect, "error");
     assert.equal(fetchCalls[0].options.headers["Content-Type"], "application/json");

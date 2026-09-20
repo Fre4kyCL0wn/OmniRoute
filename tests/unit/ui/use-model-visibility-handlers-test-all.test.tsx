@@ -11,6 +11,13 @@
 //
 // This drives the real hook: a failing model + autoHideFailed on must leave the
 // hook's visibilityFilter === "visible" so the just-hidden model disappears.
+//
+// The hook's *initial* filter is "visible" since the persisted availability
+// inventory landed (see the sibling __tests__/useModelVisibilityHandlers.test.tsx),
+// which on its own would make the assertions below vacuous — "visible" would be
+// the answer whether or not handleTestAll ever touched the filter. Each case
+// therefore drives the filter to "all" first, so the observed value afterwards
+// is only ever the result of the run under test.
 import React from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -19,11 +26,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-const {
-  useModelVisibilityHandlers,
-} = await import(
-  "../../../src/app/(dashboard)/dashboard/providers/[id]/hooks/useModelVisibilityHandlers"
-);
+const { useModelVisibilityHandlers } =
+  await import("../../../src/app/(dashboard)/dashboard/providers/[id]/hooks/useModelVisibilityHandlers");
 
 type Hook = ReturnType<typeof useModelVisibilityHandlers>;
 
@@ -99,6 +103,7 @@ describe("useModelVisibilityHandlers.handleTestAll — #4887 visible-filter pari
     setFetch({ "glm/model-ok": "ok", "glm/model-bad": "error" });
     await renderHook();
 
+    act(() => captured!.setVisibilityFilter("all"));
     expect(captured!.visibilityFilter).toBe("all");
 
     act(() => captured!.setAutoHideFailed(true));
@@ -118,6 +123,7 @@ describe("useModelVisibilityHandlers.handleTestAll — #4887 visible-filter pari
   it("does NOT switch the filter when autoHideFailed is off (nothing hidden)", async () => {
     setFetch({ "glm/model-bad": "error" });
     await renderHook();
+    act(() => captured!.setVisibilityFilter("all"));
     expect(captured!.autoHideFailed).toBe(false);
 
     await act(async () => {
@@ -131,6 +137,7 @@ describe("useModelVisibilityHandlers.handleTestAll — #4887 visible-filter pari
     setFetch({ "glm/model-ok": "ok" });
     await renderHook();
 
+    act(() => captured!.setVisibilityFilter("all"));
     act(() => captured!.setAutoHideFailed(true));
 
     await act(async () => {

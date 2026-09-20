@@ -1,7 +1,7 @@
 ---
 title: "Claude Code CLI — Configuration with OmniRoute"
-version: 3.8.40
-lastUpdated: 2026-07-24
+version: 3.8.51
+lastUpdated: 2026-09-14
 ---
 
 # Claude Code CLI — Configuration with OmniRoute
@@ -24,6 +24,29 @@ omniroute launch --remote http://192.168.0.15:20128 --api-key oma_live_xxx
 omniroute setup-claude            # writes ~/.claude/profiles/<name>/settings.json
 omniroute launch --profile glm52  # Claude Code using glm/glm-5.2 via OmniRoute
 ```
+
+---
+
+## Jarvis/O9 Shadow deployment
+
+The Jarvis fork's validated Shadow launcher uses the logical model `claude/combo/jarvis-auto` rather
+than pinning Claude Code to one provider model. `jarvis-auto` is a native priority Combo whose first
+member is the R4.7-managed `jarvis-managed/free-coding` child and whose second member may be an
+operator-verified independent fallback. New providers therefore become reachable through the same
+entrypoint when they satisfy the existing observation, Claude-Code compatibility, strict-zero-cost,
+billing-safety, health and quota gates.
+
+The host wrapper `/home/ubuntu/.local/bin/claude-jarvis-o9` keeps credentials out of command lines,
+points `ANTHROPIC_BASE_URL` at the Shadow API, and currently defaults `ANTHROPIC_MODEL` and
+`ANTHROPIC_SMALL_FAST_MODEL` to `claude/combo/jarvis-auto`. Explicit `--model` arguments continue to
+override that default. Claude Code may print an informational `unrecognized_model` warning for the
+logical Combo alias; this does not indicate a routing failure when the gateway request succeeds.
+
+Live proof on 2026-09-14 sent a normal `/v1/messages` Claude Code request with 21 tools. The
+strict-free OpenRouter route returned `429 free-models-per-day`, OmniRoute persisted a one-hour
+connection cooldown, and `jarvis-auto` completed the request through the configured independent
+fallback. A subsequent launcher-default request skipped the cooled-down OpenRouter connection
+without another upstream attempt and completed successfully.
 
 ---
 

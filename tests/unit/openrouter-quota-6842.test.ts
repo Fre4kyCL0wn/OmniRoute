@@ -358,8 +358,21 @@ test("openrouter 402 provider rule locks the connection, not the model", () => {
   assert.ok(typeof match.cooldownMs === "number" && match.cooldownMs > 0);
 });
 
-test("openrouter 402 does not match for other status codes", () => {
-  assert.equal(getProviderErrorRuleMatch("openrouter", 429, {}), null);
+test("openrouter free-models-per-day 429 locks the connection", () => {
+  const match = getProviderErrorRuleMatch(
+    "openrouter",
+    429,
+    {},
+    "Rate limit exceeded: free-models-per-day"
+  );
+  assert.ok(match);
+  assert.equal(match.reason, "quota_exhausted");
+  assert.equal(match.scope, "connection");
+  assert.ok(typeof match.cooldownMs === "number" && match.cooldownMs > 0);
+});
+
+test("openrouter provider rules ignore generic 429 and unrelated status codes", () => {
+  assert.equal(getProviderErrorRuleMatch("openrouter", 429, {}, "Rate limit exceeded"), null);
   assert.equal(getProviderErrorRuleMatch("openrouter", 500, {}), null);
 });
 

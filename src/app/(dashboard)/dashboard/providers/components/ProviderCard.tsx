@@ -36,6 +36,23 @@ interface ProviderStats {
   allDisabled?: boolean;
   expiryStatus?: "expired" | "expiring_soon" | string | null;
   codexServiceTier?: "default" | "priority" | "flex" | null;
+  modelAvailability?: {
+    totalChecked: number;
+    /**
+     * Catalog-relative counters. Optional because a legacy `/api/models/availability`
+     * payload has only the state counters — the quota/blocked/degraded badges below
+     * must keep rendering from such a payload, so nothing here may be gated on them.
+     */
+    discovered?: number;
+    untested?: number;
+    available: number;
+    rateLimited: number;
+    quotaExhausted: number;
+    unavailable: number;
+    degraded: number;
+    incompatible: number;
+    blocked: number;
+  } | null;
 }
 
 const KIND_LABEL_KEYS: Record<string, { key: string; fallback: string }> = {
@@ -617,6 +634,53 @@ const ProviderCard = forwardRef<ProviderCardHandle, ProviderCardProps>(function 
                             onActivate: handleWarningBadgeActivate,
                           }
                         : undefined
+                    )}
+                    {stats.modelAvailability && (
+                      <>
+                        {(stats.modelAvailability.untested ?? 0) > 0 && (
+                          <Badge variant="default" size="sm" icon="help">
+                            {providerText(t, "modelUntestedFlag", "{count} models untested", {
+                              count: stats.modelAvailability.untested,
+                            })}
+                          </Badge>
+                        )}
+                        {stats.modelAvailability.quotaExhausted +
+                          stats.modelAvailability.rateLimited >
+                          0 && (
+                          <Badge variant="warning" size="sm" icon="warning">
+                            {providerText(t, "modelQuotaFlag", "{count} model quota", {
+                              count:
+                                stats.modelAvailability.quotaExhausted +
+                                stats.modelAvailability.rateLimited,
+                            })}
+                          </Badge>
+                        )}
+                        {stats.modelAvailability.unavailable +
+                          stats.modelAvailability.incompatible >
+                          0 && (
+                          <Badge variant="error" size="sm" icon="error">
+                            {providerText(t, "modelBlockedFlag", "{count} model blocked", {
+                              count:
+                                stats.modelAvailability.unavailable +
+                                stats.modelAvailability.incompatible,
+                            })}
+                          </Badge>
+                        )}
+                        {stats.modelAvailability.degraded > 0 && (
+                          <Badge variant="warning" size="sm" icon="speed">
+                            {providerText(t, "modelDegradedFlag", "{count} model degraded", {
+                              count: stats.modelAvailability.degraded,
+                            })}
+                          </Badge>
+                        )}
+                        {stats.modelAvailability.available > 0 && (
+                          <Badge variant="success" size="sm" icon="check_circle">
+                            {providerText(t, "modelsAvailableFlag", "{count} models OK", {
+                              count: stats.modelAvailability.available,
+                            })}
+                          </Badge>
+                        )}
+                      </>
                     )}
                     {stats.expiryStatus === "expired" && (
                       <Badge variant="error" size="sm" dot>

@@ -4,6 +4,7 @@ import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { DEFAULT_MODEL_TEST_TIMEOUT_MS, runSingleModelTest } from "@/lib/api/modelTestRunner";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
 import { getSettings } from "@/lib/db/settings";
+import { recordModelTestAvailability } from "@/lib/db/modelAvailability";
 import { isFreeModel, providerHasFreeModels } from "@/shared/utils/freeModels";
 
 const testModelSchema = z.object({
@@ -73,11 +74,28 @@ export async function POST(request: Request) {
       streamChat: true,
     });
 
+    let availabilityState: string | undefined;
+    if (connectionId) {
+      try {
+        availabilityState = recordModelTestAvailability({
+          providerId,
+          connectionId,
+          modelId,
+          result,
+          source: "manual_test",
+        }).state;
+      } catch {
+        // Availability persistence is best-effort: never turn a successful provider
+        // probe into an API failure because the local observability write failed.
+      }
+    }
+
     if (result.status === "ok") {
       return NextResponse.json({
         status: "ok",
         latencyMs: result.latencyMs,
         responseText: result.responseText,
+        ...(availabilityState ? { availabilityState } : {}),
       });
     }
 
@@ -89,6 +107,9 @@ export async function POST(request: Request) {
     if (result.statusCode !== undefined) body.statusCode = result.statusCode;
     if (result.rateLimited) body.rateLimited = true;
     if (result.retryAfter !== undefined) body.retryAfter = result.retryAfter;
+    if (result.isQuota) body.isQuota = true;
+    if (result.isTransient) body.isTransient = true;
+    if (availabilityState) body.availabilityState = availabilityState;
 
     return NextResponse.json(body, { status: result.httpStatus });
   } catch (error: unknown) {

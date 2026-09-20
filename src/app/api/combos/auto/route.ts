@@ -8,6 +8,8 @@ import {
   AUTO_SUFFIX_VARIANTS,
   AUTO_TEMPLATE_VARIANTS,
   AUTO_FAMILY_IDS,
+  createBuiltinAutoCombo,
+  prepareBuiltinAutoComboInputs,
 } from "@omniroute/open-sse/services/autoCombo/builtinCatalog";
 import { parseAutoSuffix } from "@omniroute/open-sse/services/autoCombo/suffixComposition";
 
@@ -25,14 +27,27 @@ export async function GET(request: Request) {
   if (authError) return authError;
 
   try {
-    const { createVirtualAutoCombo } =
+    const { createVirtualAutoComboFromPrepared } =
       await import("@omniroute/open-sse/services/autoCombo/virtualFactory");
 
     const combos = [];
     const seenIds = new Set<string>();
+    // ONE snapshot of connections/models/capabilities for the whole listing.
+    // `createVirtualAutoCombo()` would re-run `prepareVirtualAutoComboInputs()`
+    // per variant — dozens of redundant catalog/connection reads for a single
+    // dashboard GET — and it prepares WITHOUT `includeResolvedCapabilities`,
+    // so these cards would score their pools differently from the three loops
+    // below and from what `/api/combos/duplicate` materializes for the very
+    // same id. Sharing the prepared inputs makes the listing internally
+    // consistent and keeps the GET a pure read.
+    const preparedBuiltins = await prepareBuiltinAutoComboInputs();
     for (const { variant, name } of ALL_VARIANTS) {
       try {
-        const virtual = await createVirtualAutoCombo(variant);
+        const virtual = await createVirtualAutoComboFromPrepared(
+          preparedBuiltins,
+          variant,
+          undefined
+        );
         const id = variant ? `auto/${variant}` : "auto";
         seenIds.add(id);
         combos.push({
@@ -42,7 +57,19 @@ export async function GET(request: Request) {
           type: "auto",
           isHidden: false,
           candidatePool: virtual.candidatePool ?? [],
-          candidateCount: virtual.candidatePool?.length ?? 0,
+          // Two DIFFERENT units: `candidateCount` counts routable MODELS,
+          // `providerCount` counts the distinct providers backing them
+          // (`candidatePool` is already deduped by provider). The dashboard
+          // renders both, so neither may be inferred from the other.
+          providerCount: (virtual.candidatePool ?? []).length,
+          candidateCount: virtual.models?.length ?? 0,
+          active: (virtual.models?.length ?? 0) > 0,
+          management: "auto",
+          candidates: (virtual.models ?? []).map((model) => ({
+            providerId: model.providerId,
+            model: model.model,
+            allowedConnectionIds: model.allowedConnectionIds ?? [],
+          })),
           // MAX of candidates' windows — consumers (opencode plugin) need a
           // real value here: advertising 0 disables client auto-compaction.
           // #7662: mirror catalog.ts's established fallback (advertisedMaxOutputTokens
@@ -67,8 +94,11 @@ export async function GET(request: Request) {
       if (seenIds.has(modelStr)) continue;
       try {
         const variant = AUTO_TEMPLATE_VARIANTS[modelStr];
-        const spec = modelStr === "auto/best-free" ? { tier: "free" as const } : undefined;
-        const virtual = await createVirtualAutoCombo(variant, spec);
+        const virtual = await createBuiltinAutoCombo(
+          modelStr,
+          modelStr.slice("auto/".length),
+          preparedBuiltins
+        );
 
         const displayName = variant
           ? `Auto ${variant.charAt(0).toUpperCase() + variant.slice(1)}`
@@ -81,7 +111,19 @@ export async function GET(request: Request) {
           type: "auto",
           isHidden: false,
           candidatePool: virtual.candidatePool ?? [],
-          candidateCount: virtual.candidatePool?.length ?? 0,
+          // Two DIFFERENT units: `candidateCount` counts routable MODELS,
+          // `providerCount` counts the distinct providers backing them
+          // (`candidatePool` is already deduped by provider). The dashboard
+          // renders both, so neither may be inferred from the other.
+          providerCount: (virtual.candidatePool ?? []).length,
+          candidateCount: virtual.models?.length ?? 0,
+          active: (virtual.models?.length ?? 0) > 0,
+          management: "auto",
+          candidates: (virtual.models ?? []).map((model) => ({
+            providerId: model.providerId,
+            model: model.model,
+            allowedConnectionIds: model.allowedConnectionIds ?? [],
+          })),
           // #7662: mirror catalog.ts's established fallback (advertisedMaxOutputTokens
           // has no generic default in computeAdvertisedLimits() the way context length
           // does — an all-unregistered candidate pool, e.g. a no-auth provider's model,
@@ -107,10 +149,7 @@ export async function GET(request: Request) {
         const parsed = parseAutoSuffix(suffix);
         if (!parsed.valid) continue;
 
-        const virtual = await createVirtualAutoCombo(undefined, {
-          category: parsed.category,
-          tier: parsed.tier,
-        });
+        const virtual = await createBuiltinAutoCombo(modelStr, suffix, preparedBuiltins);
 
         // Build a human-readable name from the category and tier
         const catName = parsed.category
@@ -128,7 +167,19 @@ export async function GET(request: Request) {
           type: "auto",
           isHidden: false,
           candidatePool: virtual.candidatePool ?? [],
-          candidateCount: virtual.candidatePool?.length ?? 0,
+          // Two DIFFERENT units: `candidateCount` counts routable MODELS,
+          // `providerCount` counts the distinct providers backing them
+          // (`candidatePool` is already deduped by provider). The dashboard
+          // renders both, so neither may be inferred from the other.
+          providerCount: (virtual.candidatePool ?? []).length,
+          candidateCount: virtual.models?.length ?? 0,
+          active: (virtual.models?.length ?? 0) > 0,
+          management: "auto",
+          candidates: (virtual.models ?? []).map((model) => ({
+            providerId: model.providerId,
+            model: model.model,
+            allowedConnectionIds: model.allowedConnectionIds ?? [],
+          })),
           // #7662: mirror catalog.ts's established fallback (advertisedMaxOutputTokens
           // has no generic default in computeAdvertisedLimits() the way context length
           // does — an all-unregistered candidate pool, e.g. a no-auth provider's model,
@@ -150,7 +201,7 @@ export async function GET(request: Request) {
       if (seenIds.has(modelStr)) continue;
       try {
         const suffix = modelStr.slice("auto/".length);
-        const virtual = await createVirtualAutoCombo(undefined, { family: suffix });
+        const virtual = await createBuiltinAutoCombo(modelStr, suffix, preparedBuiltins);
 
         const displayName = `Auto ${suffix.charAt(0).toUpperCase() + suffix.slice(1)}`;
 
@@ -161,7 +212,19 @@ export async function GET(request: Request) {
           type: "auto",
           isHidden: false,
           candidatePool: virtual.candidatePool ?? [],
-          candidateCount: virtual.candidatePool?.length ?? 0,
+          // Two DIFFERENT units: `candidateCount` counts routable MODELS,
+          // `providerCount` counts the distinct providers backing them
+          // (`candidatePool` is already deduped by provider). The dashboard
+          // renders both, so neither may be inferred from the other.
+          providerCount: (virtual.candidatePool ?? []).length,
+          candidateCount: virtual.models?.length ?? 0,
+          active: (virtual.models?.length ?? 0) > 0,
+          management: "auto",
+          candidates: (virtual.models ?? []).map((model) => ({
+            providerId: model.providerId,
+            model: model.model,
+            allowedConnectionIds: model.allowedConnectionIds ?? [],
+          })),
           // #7662: mirror catalog.ts's established fallback (advertisedMaxOutputTokens
           // has no generic default in computeAdvertisedLimits() the way context length
           // does — an all-unregistered candidate pool, e.g. a no-auth provider's model,
@@ -176,9 +239,16 @@ export async function GET(request: Request) {
       }
     }
 
-    return NextResponse.json({ combos });
+    // M7 — a fail-closed empty pool is an ongoing condition, not a one-off
+    // startup warning. `warnEmptyAutoPoolOnce` logs once per label by design, so
+    // the only way an operator can see that a route is STILL dark (and why) is
+    // if the state is published. Surfaced here rather than in a new endpoint so
+    // the panel that renders the routes also renders the reason they are empty.
+    const { getEmptyAutoPoolSignals } =
+      await import("@omniroute/open-sse/services/autoCombo/virtualFactory");
+    return NextResponse.json({ combos, emptyPoolSignals: getEmptyAutoPoolSignals() });
   } catch (error) {
     console.error("Error fetching auto combos:", error);
-    return NextResponse.json({ combos: [] });
+    return NextResponse.json({ combos: [], emptyPoolSignals: [] });
   }
 }

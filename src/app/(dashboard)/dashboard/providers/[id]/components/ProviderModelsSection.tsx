@@ -19,6 +19,7 @@ import {
   getDisplayModelAlias,
   providerText,
   type ProviderMessageTranslator,
+  resolveRowAvailabilityStatus,
 } from "../providerPageHelpers";
 import ModelRow, { ModelVisibilityToolbar } from "./ModelRow";
 import PassthroughModelsSection from "./PassthroughModelsSection";
@@ -84,6 +85,11 @@ export interface ProviderModelsSectionProps {
   modelFilter: string;
   testingModelId: string | null;
   modelTestStatus: Record<string, "ok" | "error" | "quota">;
+  /**
+   * True while the persisted availability inventory is still being fetched.
+   * Rows must render "checking" rather than UNTESTED until it flips to false.
+   */
+  modelAvailabilityLoading?: boolean;
   onModelTestStatusChange: (modelId: string, status: "ok" | "error") => void;
   testingAll: boolean;
   testProgress: { done: number; total: number } | null;
@@ -155,6 +161,7 @@ export default function ProviderModelsSection({
   modelFilter,
   testingModelId,
   modelTestStatus,
+  modelAvailabilityLoading,
   onModelTestStatusChange,
   testingAll,
   testProgress,
@@ -297,6 +304,7 @@ export default function ProviderModelsSection({
           togglingModelId={togglingModelId}
           onTestModel={onTestModel}
           modelTestStatus={modelTestStatus}
+          modelAvailabilityLoading={modelAvailabilityLoading}
           testingModelId={testingModelId}
           onTestAll={handleTestAll}
           testingAll={testingAll}
@@ -372,6 +380,7 @@ export default function ProviderModelsSection({
           togglingModelId={togglingModelId}
           onTestModel={onTestModel}
           modelTestStatus={modelTestStatus}
+          modelAvailabilityLoading={modelAvailabilityLoading}
           onModelTestStatusChange={onModelTestStatusChange}
           testingModelId={testingModelId}
           providerId={providerId}
@@ -426,6 +435,8 @@ export default function ProviderModelsSection({
   const modelsWithVisibility = models.map((model) => ({
     ...model,
     isHidden: effectiveModelHidden(model.id),
+    operationallyBlocked:
+      modelTestStatus[model.id] === "error" || modelTestStatus[model.id] === "quota",
     isFree: isFreeModel(providerId, { id: model.id, isFree: (model as any).isFree }),
   }));
   const filteredModels = modelsWithVisibility.filter((model) => {
@@ -438,8 +449,8 @@ export default function ProviderModelsSection({
       visibilityFilter === "all"
         ? true
         : visibilityFilter === "visible"
-          ? !model.isHidden
-          : model.isHidden;
+          ? !model.isHidden && !model.operationallyBlocked
+          : model.isHidden || model.operationallyBlocked;
     const matchesFreeFilter =
       freeFilter === "all" ? true : freeFilter === "free" ? model.isFree : !model.isFree;
     return matchesQuery && matchesVisibility && matchesFreeFilter;
@@ -447,8 +458,12 @@ export default function ProviderModelsSection({
   const displayModels = sortFreeFirst
     ? sortModelsFreeFirst(filteredModels, { isFree: (m) => m.isFree, key: (m) => m.id })
     : filteredModels;
-  const activeCount = modelsWithVisibility.filter((m) => !m.isHidden).length;
-  const hiddenFilteredCount = filteredModels.filter((m) => m.isHidden).length;
+  const activeCount = modelsWithVisibility.filter(
+    (m) => !m.isHidden && !m.operationallyBlocked
+  ).length;
+  const hiddenFilteredCount = filteredModels.filter(
+    (m) => m.isHidden || m.operationallyBlocked
+  ).length;
   const visibleFilteredCount = filteredModels.length - hiddenFilteredCount;
   const testAllTargets = filteredModels
     .filter((m) => !m.isHidden)
@@ -520,7 +535,10 @@ export default function ProviderModelsSection({
               }
               togglingHidden={togglingModelId === model.id}
               onTestModel={onTestModel}
-              testStatus={modelTestStatus[model.id] || null}
+              testStatus={resolveRowAvailabilityStatus(
+                modelTestStatus[model.id],
+                modelAvailabilityLoading
+              )}
               testingModel={testingModelId === model.id}
             />
           );

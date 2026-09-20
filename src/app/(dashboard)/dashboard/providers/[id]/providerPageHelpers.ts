@@ -127,6 +127,30 @@ export function validationBadgeProps(result: string): {
   return { variant: "error", labelKey: "invalid", fallback: "Invalid" };
 }
 
+/** What a model row's availability chip can show. */
+export type ModelRowAvailabilityStatus = "ok" | "error" | "quota" | "unknown" | "loading";
+
+/**
+ * Decide the availability chip for one model row.
+ *
+ * The three model sections used to render `status || "unknown"`, which labels a
+ * model UNTESTED during the very first paint — before the inventory fetch has
+ * even returned. That is a lie in the one direction that matters: it invites an
+ * operator to re-test models that are already known-good, and it makes a slow
+ * or failing availability API indistinguishable from an empty inventory. A
+ * missing status means "untested" only once the fetch has settled.
+ *
+ * `loading` left undefined keeps the historical behavior, so a caller that does
+ * not track the fetch still renders exactly as before.
+ */
+export function resolveRowAvailabilityStatus(
+  status: "ok" | "error" | "quota" | null | undefined,
+  loading?: boolean
+): ModelRowAvailabilityStatus {
+  if (status === "ok" || status === "error" || status === "quota") return status;
+  return loading ? "loading" : "unknown";
+}
+
 /** A single model's outcome from a `/api/models/test-all` response. */
 export interface TestAllModelOutcome {
   status: "ok" | "error";

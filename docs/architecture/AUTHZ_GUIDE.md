@@ -202,6 +202,27 @@ API keys carry a `scopes` array (stored as JSON in `api_keys.scopes`, see `src/l
 
 - `manage` / `admin` — grants the key access to management API endpoints when sent as Bearer.
 
+### CLI access-token scope hierarchy (remote mode)
+
+A separate credential type — the scoped CLI access token (`oma_...`, `src/lib/db/accessTokens.ts`) — authorizes the `omniroute` CLI and machine callers such as Jarvis's Shadow control-plane adapter (`src/lib/failover/shadowControlPlaneAdapter.ts`). It carries one of three ranked scopes (`src/lib/accessTokens/scopes.ts`): `read` ⊂ `write` ⊂ `admin`. `evaluateAccessTokenAuth()` (`src/server/authz/accessTokenAuth.ts`) infers the scope a request needs from its HTTP method and path via `inferRequiredScope()` (`src/server/authz/accessScopes.ts`):
+
+- GET/HEAD/OPTIONS → `read`.
+- Any mutating verb → `write`, **except** a path under `ADMIN_SCOPE_PREFIXES` (admin for every method — see the list in `src/server/authz/accessScopes.ts`, e.g. `/api/cli/tokens`, `/api/oauth`, `/api/auth`, `/api/services`, `/api/mcp`) or `ADMIN_MUTATION_PREFIXES` (admin only when mutating — currently `/api/providers`, `/api/cli-tools/apply`), which require `admin`.
+
+A `write`-scope token satisfies every plain mutating route; it does **not** satisfy a route under either admin list. This is a path-prefix classification, not a per-route allowlist — a new route only requires `admin` if its path literally falls under one of those two prefix lists.
+
+### Passive observation vs. provider administration (O9-F3.5 A7.1 "R2.2")
+
+`/api/providers/*` is provider **administration**: creating/deleting a connection, rotating a credential, changing provider configuration. Every mutating verb under this prefix is intentionally `ADMIN_MUTATION_PREFIXES`-gated (`admin` scope required) — that boundary is unchanged and must stay unchanged.
+
+Passive provider **observation** — reading a provider's own model catalog without persisting anything, activating anything, or performing inference — is a different, lower-privilege operation and lives outside that prefix, at `POST /api/provider-observations/passive-model-discovery` (moved here in R2.2; previously `POST /api/providers/passive-model-discovery`, which incorrectly inherited the `admin` requirement from the `/api/providers` prefix — an authorization-namespace mismatch, not a deliberate security boundary). A `write`-scope access token (the class of credential OmniRoute issues to a machine caller like Jarvis's Shadow control-plane adapter) is sufficient; `admin` is not required, and unauthenticated or `read`-only callers are still denied like any other management route.
+
+Key distinctions, enforced structurally (see `src/app/api/provider-observations/passive-model-discovery/passiveModelDiscovery.ts` for the exact writer/inference exclusions):
+
+- **PASSIVE OBSERVATION != PROVIDER ADMINISTRATION** — the route can only read a catalog; it holds no path to create/delete/reconfigure a provider connection.
+- **PASSIVE OBSERVATION != AUTO-SYNC** — no synced/custom-model writer, no Auto-Sync trigger, no `autoFetchModels` mutation, no Combo writer.
+- **OBSERVED != ROUTABLE** — a model appearing in a passive-discovery result proves only that the provider's catalog currently lists it for that connection; it carries no capability, free-tier, or activation verdict. That remains the job of the existing A2-A7 evidence/activation pipeline.
+
 ### MCP scopes (`src/shared/constants/mcpScopes.ts`)
 
 Each MCP tool requires specific scopes via `MCP_TOOL_SCOPES`. Full list (`MCP_SCOPE_LIST`):

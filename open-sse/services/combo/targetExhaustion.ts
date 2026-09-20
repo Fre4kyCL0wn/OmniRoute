@@ -27,10 +27,9 @@ import {
 import { RateLimitReason } from "../../config/constants.ts";
 import { isProviderCircuitOpenResult, isRequestScopedUpstreamFailure } from "./comboPredicates.ts";
 import { isCloudflareFingerprintRejection } from "../errorClassifier.ts";
-// #10334 — agentrouter-exclusive predicate shared with the persistence layer
-// (markAccountUnavailable) so the same-request combo skip and the persisted
-// connection cooldown agree on exactly which fallbackResult shapes qualify.
-import { isAgentrouterConnectionQuotaScope } from "@/sse/services/auth";
+// Shared with markAccountUnavailable so same-request combo skipping and the
+// persisted connection cooldown agree on which fallbackResult shapes qualify.
+import { isConnectionQuotaScope } from "@/sse/services/auth";
 import type { ComboLogger, ResolvedComboTarget } from "./types.ts";
 
 // Connection-level failure statuses: the provider connection itself is likely bad (upstream
@@ -45,6 +44,18 @@ const CONNECTION_LEVEL_ERROR_STATUSES = [408, 500, 502, 503, 504, 524];
 // attempts on dead connections; #8137: whole-provider exhaustion wrongly skipped healthy
 // sibling connections on the same provider).
 const AUTH_LEVEL_ERROR_STATUSES = [401, 403];
+
+// Legacy compatibility for #10334 / #10419 ONLY. For a connection-scoped account
+// quota exhaustion whose target carries NO connectionId, markConnectionQuotaExhaustion
+// escalates to whole-provider exhaustion for providers in this set. This is NOT the
+// default for new providers: a missing connection identity is not proof that every
+// sibling account shares one budget, so new providers (e.g. openrouter, O9-F3.3P0+)
+// leave the request-scoped sets untouched and let the persisted per-connection
+// cooldown handle it (unknown stays unknown). agentrouter shipped with the
+// "mirror markAuthLevelExhaustion" fallback (e05ac345d) pinned by an explicit
+// test; removing or changing that legacy behavior would be its own initiative,
+// not part of O9-F3.3P0.
+const LEGACY_NO_CONNECTION_ID_PROVIDER_LOCKOUT_PROVIDERS = new Set(["agentrouter"]);
 
 // #5085: an "empty content" 502 is the synthetic status chatCore assigns to a provider that
 // answered HTTP 200 with no usable completion (isEmptyContentResponse). The connection is
@@ -84,9 +95,8 @@ export type ComboExhaustionSets = {
 export type ApplyComboTargetExhaustionOptions = {
   result: { status: number; headers?: Headers | null };
   fallbackResult: Parameters<typeof isProviderExhaustedReason>[0] & {
-    /** #10334 — agentrouter-exclusive; see isAgentrouterConnectionQuotaScope
-     * (src/sse/services/auth.ts). Populated only for providers in
-     * HONORS_RULE_LOCK_SCOPE_PROVIDERS (today: agentrouter only). */
+    /** See isConnectionQuotaScope (src/sse/services/auth.ts). Populated only
+     * for providers in HONORS_RULE_LOCK_SCOPE_PROVIDERS. */
     ruleScope?: "model" | "provider" | "connection";
     permanent?: boolean;
   };
@@ -115,9 +125,9 @@ export function applyComboTargetExhaustion(
   const { result, sets, log, tag, errorText, structuredError } = opts;
   const provider = target.provider;
 
-  // #10334: agentrouter-exclusive account-wide quota exhaustion ("额度不足")
-  // must skip remaining SAME-CONNECTION targets within THIS request too, not
-  // just via the persisted cooldown markAccountUnavailable applies for
+  // Connection-scoped account quota exhaustion must skip remaining
+  // SAME-CONNECTION targets within THIS request too, not just via the persisted
+  // cooldown markAccountUnavailable applies for
   // whichever leg runs next. agentrouter is a passthroughModels provider
   // (hasPerModelQuota() === true), so without this branch the classification
   // below would fall straight through isProviderQuotaExhausted's
@@ -125,27 +135,14 @@ export function applyComboTargetExhaustion(
   // markConnectionLevelExhaustion's connection-level guard (429 is not in
   // CONNECTION_LEVEL_ERROR_STATUSES), marking nothing: combo would keep
   // burning one upstream call per remaining model of the same exhausted
-  // account. isAgentrouterConnectionQuotaScope is the same guard
-  // markAccountUnavailable uses, so both consumers agree on exactly which
+  // account. isConnectionQuotaScope is the same guard markAccountUnavailable
+  // uses, so both consumers agree on exactly which
   // fallbackResult shapes qualify (never a permanent/credits-exhausted
   // result, even one carrying ruleScope "connection").
   //
-  // Runs BEFORE the auth-level (401/403) branch below. This is deliberate,
-  // not incidental: the "额度不足" rule matches statuses {400, 403, 429}
-  // (buildAgentrouterRules, providerErrorRules.ts), and Task 1's FORBIDDEN
-  // pre-check (accountFallback.ts ~1729-1751) surfaces `ruleScope:
-  // "connection"` for a RAW 403 carrying that body too — so this branch can
-  // also fire on a 403, not just the restated 429. That is safe: for a 403
-  // this branch and markAuthLevelExhaustion below write the SAME set with
-  // the SAME `${provider}:${connId}` key and both return `true` — they are
-  // set-equivalent for agentrouter on that status. The Cloudflare-1010 and
-  // Alibaba free-tier EXEMPTIONS further down in the 401/403 branch cannot
-  // apply here regardless of ordering: 1010 is a CDN fingerprint rejection
-  // agentrouter's own text never carries, and the Alibaba exemption is
-  // gated on isAlibabaModelStudioProvider(provider), which agentrouter is
-  // not.
-  //
-  // Unlike the connection-level/auth-level branches, this path deliberately
+  // Runs before auth-level handling because an allowlisted provider rule can
+  // classify a raw 403 quota response as connection-scoped. Unlike the
+  // connection-level/auth-level branches, this path deliberately
   // does NOT fall through to markTransientOrConnectionLevel, so
   // sets.transientRateLimitedProviders is NEVER populated for this failure.
   // That is required, not just incidental: combo.ts (both dispatchers, see
@@ -160,8 +157,8 @@ export function applyComboTargetExhaustion(
   // force-allowed for a later leg on the same provider — a remaining leg
   // can now resolve to "no credentials available" instead of retrying a
   // rate-limited sibling account, which is the intended, safer outcome.
-  if (isAgentrouterConnectionQuotaScope(provider, opts.fallbackResult)) {
-    markAgentrouterConnectionQuotaExhaustion(target, { sets, log, tag });
+  if (isConnectionQuotaScope(provider, opts.fallbackResult)) {
+    markConnectionQuotaExhaustion(target, { sets, log, tag });
     return true;
   }
 
@@ -341,13 +338,12 @@ function markAuthLevelExhaustion(
 }
 
 /**
- * #10334: agentrouter-exclusive connection-scope account quota exhaustion. Mirrors
- * markAuthLevelExhaustion's connectionId-present/absent split — when the target carries a
- * connectionId, only that connection's account is exhausted (sibling agentrouter connections
- * for the same user may still have quota); fall back to whole-provider exhaustion only when no
- * connectionId is available.
+ * Connection-scope account quota exhaustion. When a connectionId is present it
+ * mirrors markAuthLevelExhaustion's connection-scoping so sibling accounts stay
+ * independently eligible. When it is ABSENT the paths deliberately diverge — see
+ * the no-connectionId branch below.
  */
-function markAgentrouterConnectionQuotaExhaustion(
+function markConnectionQuotaExhaustion(
   target: ResolvedComboTarget,
   opts: Pick<ApplyComboTargetExhaustionOptions, "sets" | "log" | "tag">
 ): void {
@@ -360,13 +356,33 @@ function markAgentrouterConnectionQuotaExhaustion(
       tag,
       `Provider ${provider} connection ${connId} account quota exhausted (rule scope=connection) — marking for skip on remaining targets (#10334)`
     );
-  } else {
+    return;
+  }
+  // No connectionId to scope to. A connection-scoped ACCOUNT-QUOTA signal
+  // (e.g. OpenRouter free-models-per-day) only proves that ONE account is out of
+  // its renewing budget — sibling connections are independent accounts with their
+  // own budgets, and "which account failed" is genuinely unknown here. Unlike
+  // markAuthLevelExhaustion / markConnectionLevelExhaustion — where a bad key or
+  // a dead connection fails every leg on the provider identically — escalating to
+  // exhaustedProviders here would skip every healthy sibling connection for the
+  // rest of the request. Default (new providers): leave the request-scoped sets
+  // untouched; the persisted per-connection cooldown (markAccountUnavailable,
+  // rule scope "connection") still cools whichever connection the failing leg
+  // actually resolved.
+  if (LEGACY_NO_CONNECTION_ID_PROVIDER_LOCKOUT_PROVIDERS.has(provider)) {
+    // Legacy #10334 / #10419 behavior for agentrouter only — pinned by an
+    // explicit test; see LEGACY_NO_CONNECTION_ID_PROVIDER_LOCKOUT_PROVIDERS.
     sets.exhaustedProviders.add(provider as string);
     log.info(
       tag,
-      `Provider ${provider} account quota exhausted (rule scope=connection, no connectionId) — marking for skip on remaining targets (#10334)`
+      `Provider ${provider} account quota exhausted (rule scope=connection, no connectionId) — marking for skip on remaining targets (#10334 legacy)`
     );
+    return;
   }
+  log.info(
+    tag,
+    `Provider ${provider} account quota exhausted (rule scope=connection) but no connectionId resolved — scope unknown, NOT escalating to a request-wide provider lockout (#10334)`
+  );
 }
 
 /**

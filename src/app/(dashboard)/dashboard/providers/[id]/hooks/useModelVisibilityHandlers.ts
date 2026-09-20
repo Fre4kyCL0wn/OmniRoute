@@ -20,7 +20,7 @@
  * ProviderDetailPageClient.
  */
 
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   formatProviderModelsErrorResponse,
   providerText,
@@ -71,6 +71,14 @@ export interface UseModelVisibilityHandlersReturn {
   modelFilter: string;
   testingModelId: string | null;
   modelTestStatus: Record<string, "ok" | "error" | "quota">;
+  /**
+   * True while the persisted availability inventory for the selected connection
+   * is still being fetched. A model missing from `modelTestStatus` means
+   * "nobody has probed it" only once this is false — before that it merely
+   * means "we have not read the evidence yet", and the rows must not label it
+   * UNTESTED.
+   */
+  modelAvailabilityLoading: boolean;
   testingAll: boolean;
   testProgress: { done: number; total: number } | null;
   autoHideFailed: boolean;
@@ -116,11 +124,14 @@ export function useModelVisibilityHandlers({
   const [clearingModels, setClearingModels] = useState(false);
   const [modelFilter, setModelFilter] = useState("");
   const [testingModelId, setTestingModelId] = useState<string | null>(null);
-  const [modelTestStatus, setModelTestStatus] = useState<Record<string, "ok" | "error" | "quota">>({});
+  const [modelTestStatus, setModelTestStatus] = useState<Record<string, "ok" | "error" | "quota">>(
+    {}
+  );
+  const [modelAvailabilityLoading, setModelAvailabilityLoading] = useState(true);
   const [testingAll, setTestingAll] = useState(false);
   const [testProgress, setTestProgress] = useState<{ done: number; total: number } | null>(null);
   const [autoHideFailed, setAutoHideFailed] = useState(false);
-  const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("all");
+  const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("visible");
 
   const providerAliasEntries = useMemo(
     () =>
@@ -129,6 +140,80 @@ export function useModelVisibilityHandlers({
       ) as [string, string][],
     [modelAliases, providerStorageAlias]
   );
+
+  const selectedConnectionId =
+    selectedConnection && typeof selectedConnection.id === "string" ? selectedConnection.id : "";
+  const selectedConnectionProvider =
+    selectedConnection && typeof selectedConnection.provider === "string"
+      ? selectedConnection.provider
+      : "";
+  const providerNodeId = providerNode && typeof providerNode.id === "string" ? providerNode.id : "";
+
+  useEffect(() => {
+    const connectionId = selectedConnectionId;
+    const availabilityProviderId = selectedConnectionProvider || providerNodeId || providerId;
+    let cancelled = false;
+
+    // A provider page normally has no `selectedConnection`: that state is only
+    // populated while editing an account. In that normal view we still need to
+    // show persisted availability, so ask the API for all provider inventories
+    // and aggregate them. An explicitly selected account remains connection-specific.
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setModelAvailabilityLoading(true);
+    });
+    void (async () => {
+      try {
+        const params = new URLSearchParams({ providerId: availabilityProviderId });
+        if (connectionId) params.set("connectionId", connectionId);
+        const response = await fetch(`/api/models/availability?${params.toString()}`, {
+          cache: "no-store",
+        });
+        const payload = response?.ok ? await response.json() : null;
+        if (cancelled) return;
+
+        const inventories = connectionId
+          ? payload?.inventory
+            ? [payload.inventory]
+            : []
+          : Array.isArray(payload?.inventories)
+            ? payload.inventories
+            : [];
+        const next: Record<string, "ok" | "error" | "quota"> = {};
+        const priority = { error: 1, quota: 2, ok: 3 } as const;
+
+        for (const inventory of inventories) {
+          const models = inventory?.models;
+          if (!models || typeof models !== "object") continue;
+          for (const [modelId, raw] of Object.entries(models as Record<string, unknown>)) {
+            if (!raw || typeof raw !== "object") continue;
+            const state = (raw as Record<string, unknown>).state;
+            const candidate =
+              state === "available"
+                ? "ok"
+                : state === "rate_limited" || state === "quota_exhausted"
+                  ? "quota"
+                  : typeof state === "string"
+                    ? "error"
+                    : null;
+            if (!candidate) continue;
+            const current = next[modelId];
+            if (!current || priority[candidate] > priority[current]) next[modelId] = candidate;
+          }
+        }
+        setModelTestStatus(next);
+      } catch {
+        if (!cancelled) setModelTestStatus({});
+      } finally {
+        // The fetch settled either way; the rows may now distinguish
+        // "no evidence" from "evidence not read yet".
+        if (!cancelled) setModelAvailabilityLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [providerId, providerNodeId, selectedConnectionId, selectedConnectionProvider]);
 
   const saveModelCompatFlags = async (modelId: string, patch: ModelCompatSavePatch) => {
     setCompatSavingModelId(modelId);
@@ -319,7 +404,16 @@ export function useModelVisibilityHandlers({
         notify.error(
           extractApiErrorMessage(data, providerText(t, "modelTestFailed", "Model test failed"))
         );
-        setModelTestStatus((prev) => ({ ...prev, [modelId]: "error" }));
+        const persistentState =
+          typeof data?.availabilityState === "string" ? data.availabilityState : "";
+        const quotaBlocked =
+          data?.isQuota === true ||
+          persistentState === "quota_exhausted" ||
+          persistentState === "rate_limited";
+        setModelTestStatus((prev) => ({
+          ...prev,
+          [modelId]: quotaBlocked ? "quota" : "error",
+        }));
       }
     } catch (err) {
       notify.error(providerText(t, "modelTestNetworkError", "Network error testing model"));
@@ -423,6 +517,7 @@ export function useModelVisibilityHandlers({
     modelFilter,
     testingModelId,
     modelTestStatus,
+    modelAvailabilityLoading,
     testingAll,
     testProgress,
     autoHideFailed,

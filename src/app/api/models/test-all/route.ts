@@ -17,6 +17,7 @@ import { DEFAULT_MODEL_TEST_TIMEOUT_MS, runSingleModelTest } from "@/lib/api/mod
 import { setModelIsHidden } from "@/lib/db/models";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { getSettings } from "@/lib/db/settings";
+import { recordModelTestAvailability } from "@/lib/db/modelAvailability";
 import { isFreeModel, providerHasFreeModels } from "@/shared/utils/freeModels";
 import * as log from "@/sse/utils/logger";
 
@@ -158,6 +159,19 @@ export async function POST(request: Request) {
         streamChat: true,
       });
       entry = toBatchEntry(result);
+      if (connectionId) {
+        try {
+          recordModelTestAvailability({
+            providerId,
+            connectionId,
+            modelId,
+            result,
+            source: "batch_test",
+          });
+        } catch {
+          // Best-effort local state only; preserve the batch test result.
+        }
+      }
       testedUpstream += 1;
     } catch (error: unknown) {
       log.error("MODEL_TEST_ALL", `Unexpected error testing model ${modelId}`, {

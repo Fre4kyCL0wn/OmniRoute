@@ -30,6 +30,7 @@ import {
   shouldSwitchToVisibleFilter,
   type CompatModelRow,
   type CompatByProtocolMap,
+  resolveRowAvailabilityStatus,
 } from "../providerPageHelpers";
 import { ModelVisibilityToolbar } from "./ModelRow";
 import { sortModelsFreeFirst, isFreeModel } from "@/shared/utils/freeModels";
@@ -71,6 +72,11 @@ export interface PassthroughModelsSectionProps {
   togglingModelId?: string | null;
   onTestModel?: (modelId: string, fullModel: string) => Promise<void>;
   modelTestStatus?: Record<string, "ok" | "error" | "quota" | null>;
+  /**
+   * True while the persisted availability inventory is still being fetched.
+   * Rows must render "checking" rather than UNTESTED until it flips to false.
+   */
+  modelAvailabilityLoading?: boolean;
   /** Report a model's test-all result so the parent updates the green/red icon. */
   onModelTestStatusChange?: (modelId: string, status: "ok" | "error" | "quota") => void;
   testingModelId?: string | null;
@@ -116,6 +122,7 @@ export default function PassthroughModelsSection({
   togglingModelId,
   onTestModel,
   modelTestStatus,
+  modelAvailabilityLoading,
   onModelTestStatusChange,
   testingModelId,
   providerId,
@@ -134,7 +141,7 @@ export default function PassthroughModelsSection({
   const autoHideFailed =
     autoHideFailedProp !== undefined ? autoHideFailedProp : localAutoHideFailed;
   const setAutoHideFailed = onAutoHideFailedChange ?? setLocalAutoHideFailed;
-  const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("all");
+  const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("visible");
   const [freeFilter, setFreeFilter] = useState<"all" | "free" | "paid">("all");
   const [sortFreeFirst, setSortFreeFirst] = useState(false);
   const notify = useNotificationStore();
@@ -322,12 +329,14 @@ export default function PassthroughModelsSection({
       source: model.source,
     });
 
+    const operationallyBlocked =
+      modelTestStatus?.[model.modelId] === "error" || modelTestStatus?.[model.modelId] === "quota";
     const matchesVisibility =
       visibilityFilter === "all"
         ? true
         : visibilityFilter === "visible"
-          ? !model.isHidden
-          : model.isHidden;
+          ? !model.isHidden && !operationallyBlocked
+          : model.isHidden || operationallyBlocked;
 
     const matchesFreeFilter =
       freeFilter === "all" ? true : freeFilter === "free" ? model.isFree : !model.isFree;
@@ -337,7 +346,12 @@ export default function PassthroughModelsSection({
   const displayModels = sortFreeFirst
     ? sortModelsFreeFirst(filteredModels, { isFree: (m) => m.isFree, key: (m) => m.modelId })
     : filteredModels;
-  const activeCount = allModels.filter((model) => !model.isHidden).length;
+  const activeCount = allModels.filter(
+    (model) =>
+      !model.isHidden &&
+      modelTestStatus?.[model.modelId] !== "error" &&
+      modelTestStatus?.[model.modelId] !== "quota"
+  ).length;
 
   const handleAdd = async () => {
     if (!newModel.trim() || adding) return;
@@ -447,7 +461,10 @@ export default function PassthroughModelsSection({
                 onToggleHidden={onToggleHidden}
                 togglingHidden={togglingModelId === modelId}
                 onTestModel={onTestModel}
-                testStatus={modelTestStatus?.[modelId] || null}
+                testStatus={resolveRowAvailabilityStatus(
+                  modelTestStatus?.[modelId],
+                  modelAvailabilityLoading
+                )}
                 testingModel={testingModelId === modelId}
               />
             ))}

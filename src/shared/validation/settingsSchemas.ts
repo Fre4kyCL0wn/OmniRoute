@@ -165,6 +165,9 @@ export const updateSettingsSchema = z.object({
       reentryMinRemainingPercent: z.number().min(0).max(100).optional(),
       // Per-rung spend ceiling in USD. 0 disables a rung outright.
       rungBudgetUsd: z.record(z.string().max(32), z.number().min(0)).optional(),
+      // Spend-accounting window used by auto/thrifty. Monthly is the
+      // conservative default when omitted.
+      budgetWindow: z.enum(["daily", "monthly"]).optional(),
     })
     .optional(),
   hideHealthCheckLogs: z.boolean().optional(),
