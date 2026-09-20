@@ -49,6 +49,7 @@ import type { BillableConnection } from "@omniroute/open-sse/services/autoCombo/
 import type { ProviderRuntimeState } from "@omniroute/open-sse/services/providerRuntimeState.ts";
 import { AUTO_COMBO_NOAUTH_ALLOWLIST } from "@omniroute/open-sse/services/autoCombo/noAuthAutoPolicy.ts";
 import { SYNTHETIC_NOAUTH_CONNECTION_ID } from "@omniroute/open-sse/services/autoCombo/resilienceCandidateFilter.ts";
+import { filterSupportedParametersForRoute } from "@/lib/db/paramFilters";
 
 import { applyObservationRefresh, emptyInventory } from "../providerOnboarding/catalog";
 import {
@@ -984,7 +985,11 @@ export function runShadowManagedComboPipeline(
           providerModelId: resolved.record.providerModelId,
           toolCalling: resolved.evidence.toolCalling,
           contextWindow: resolved.record.contextWindow,
-          supportedParameters: resolved.record.supportedParameters,
+          supportedParameters: filterSupportedParametersForRoute(
+            candidate.providerId,
+            resolved.record.providerModelId,
+            resolved.record.supportedParameters
+          ),
           compatibilityLatencyMs: compatibilityEvidence?.latencyMs ?? null,
           runtimeState,
           nowMs: input.now,

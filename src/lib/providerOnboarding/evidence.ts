@@ -23,6 +23,10 @@ import type { ProviderObservationRecord } from "./types";
 import { compatibilityVerdict, type ProviderModelCompatibilityEvidence } from "./compatibility";
 import { resolveCompleteRouteZeroCost } from "./completeRouteZeroCost";
 import { SYNTHETIC_NOAUTH_CONNECTION_ID } from "@omniroute/open-sse/services/autoCombo/resilienceCandidateFilter.ts";
+import {
+  filterSupportedParametersForRoute,
+  isParamEffectivelyBlocked,
+} from "@/lib/db/paramFilters";
 import { isAutoComboNoAuthProvider } from "@omniroute/open-sse/services/autoCombo/noAuthAutoPolicy.ts";
 
 export type UsageCostClass =
@@ -92,8 +96,15 @@ function catalogZeroPriceFor(record: ProviderObservationRecord | null | undefine
 
 function observedToolCalling(record: ProviderObservationRecord | null | undefined): boolean | null {
   if (!record?.currentlyObserved) return null;
+  // Runtime-learned `tools` rejection is stronger than stale provider-catalog metadata.
+  if (isParamEffectivelyBlocked(record.providerId, record.providerModelId, "tools")) return false;
   if (record.toolCallingObserved !== null) return record.toolCallingObserved;
-  const params = record.supportedParameters?.map((value) => value.toLowerCase()) ?? [];
+  const params =
+    filterSupportedParametersForRoute(
+      record.providerId,
+      record.providerModelId,
+      record.supportedParameters
+    )?.map((value) => value.toLowerCase()) ?? [];
   return params.includes("tools") || params.includes("tool_choice") ? true : null;
 }
 
@@ -110,13 +121,26 @@ export function isToolRoundTripProbePlausible(
 ): boolean {
   if (evidence.toolCalling === false) return false;
   if (record.supportedParameters === null) return true;
-  const params = record.supportedParameters.map((value) => value.toLowerCase());
+  const params =
+    filterSupportedParametersForRoute(
+      record.providerId,
+      record.providerModelId,
+      record.supportedParameters
+    )?.map((value) => value.toLowerCase()) ?? [];
   return params.includes("tools") || params.includes("tool_choice");
 }
 
 export function compatibilityProbePriority(record: ProviderObservationRecord): number {
   const id = record.providerModelId.toLowerCase();
-  const params = new Set((record.supportedParameters ?? []).map((value) => value.toLowerCase()));
+  const params = new Set(
+    (
+      filterSupportedParametersForRoute(
+        record.providerId,
+        record.providerModelId,
+        record.supportedParameters
+      ) ?? []
+    ).map((value) => value.toLowerCase())
+  );
   let score = 0;
   if (/(^|[\/_.:-])(code|coder|coding)([\/_.:-]|$)/.test(id)) score += 40;
   if (id.includes("devstral") || id.includes("software") || id.includes("programmer")) score += 25;
