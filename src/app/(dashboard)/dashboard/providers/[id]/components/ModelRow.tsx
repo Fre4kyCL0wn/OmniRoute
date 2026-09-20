@@ -15,7 +15,7 @@ import {
   getModelCatalogSourceLabel,
   normalizeModelCatalogSource,
 } from "@/shared/utils/modelCatalogSearch";
-import { providerText } from "../providerPageHelpers";
+import { providerText, type ModelRowAvailabilityStatus } from "../providerPageHelpers";
 import ModelCompatPopover from "./ModelCompatPopover";
 
 // ---------------------------------------------------------------------------
@@ -278,7 +278,8 @@ export interface ModelRowProps {
   onToggleHidden?: (modelId: string, hidden: boolean) => Promise<void>;
   togglingHidden?: boolean;
   onTestModel?: (modelId: string, fullModel: string) => Promise<void>;
-  testStatus?: "ok" | "error" | "quota" | null;
+  /** `loading` = the inventory fetch has not settled yet; never label that UNTESTED. */
+  testStatus?: ModelRowAvailabilityStatus | null;
   testingModel?: boolean;
 }
 
@@ -355,25 +356,38 @@ export default function ModelRow({
         >
           smart_toy
         </span>
-        <code className="rounded bg-sidebar px-1.5 py-0.5 font-mono text-xs text-text-muted">
+        {/* The availability badge added a fourth item to this row; without
+            `min-w-0 truncate` a long model id pushes the badges out of the card
+            instead of the id itself giving way (the row wraps, the code element
+            does not). Mirrors PassthroughModelRow. */}
+        <code
+          className="min-w-0 max-w-full truncate rounded bg-sidebar px-1.5 py-0.5 font-mono text-xs text-text-muted"
+          title={fullModel}
+        >
           {fullModel}
         </code>
         <ModelSourceBadge source={model.source} />
         {testStatus && (
           <span
-            className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
+            className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
               testStatus === "ok"
                 ? "border-green-500/40 bg-green-500/10 text-green-500"
                 : testStatus === "quota"
                   ? "border-amber-500/40 bg-amber-500/10 text-amber-500"
-                  : "border-red-500/40 bg-red-500/10 text-red-500"
+                  : testStatus === "error"
+                    ? "border-red-500/40 bg-red-500/10 text-red-500"
+                    : "border-slate-500/30 bg-slate-500/10 text-text-muted"
             }`}
           >
             {testStatus === "ok"
               ? providerText(t, "modelAvailabilityAvailable", "available")
               : testStatus === "quota"
                 ? providerText(t, "modelAvailabilityQuota", "quota")
-                : providerText(t, "modelAvailabilityBlocked", "blocked")}
+                : testStatus === "error"
+                  ? providerText(t, "modelAvailabilityBlocked", "blocked")
+                  : testStatus === "loading"
+                    ? providerText(t, "modelAvailabilityChecking", "checking…")
+                    : providerText(t, "modelAvailabilityUntested", "untested")}
           </span>
         )}
         {onSetAlias && (

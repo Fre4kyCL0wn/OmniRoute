@@ -19,6 +19,7 @@ import {
   getDisplayModelAlias,
   providerText,
   type ProviderMessageTranslator,
+  resolveRowAvailabilityStatus,
 } from "../providerPageHelpers";
 import ModelRow, { ModelVisibilityToolbar } from "./ModelRow";
 import PassthroughModelsSection from "./PassthroughModelsSection";
@@ -84,6 +85,11 @@ export interface ProviderModelsSectionProps {
   modelFilter: string;
   testingModelId: string | null;
   modelTestStatus: Record<string, "ok" | "error" | "quota">;
+  /**
+   * True while the persisted availability inventory is still being fetched.
+   * Rows must render "checking" rather than UNTESTED until it flips to false.
+   */
+  modelAvailabilityLoading?: boolean;
   onModelTestStatusChange: (modelId: string, status: "ok" | "error") => void;
   testingAll: boolean;
   testProgress: { done: number; total: number } | null;
@@ -155,6 +161,7 @@ export default function ProviderModelsSection({
   modelFilter,
   testingModelId,
   modelTestStatus,
+  modelAvailabilityLoading,
   onModelTestStatusChange,
   testingAll,
   testProgress,
@@ -297,6 +304,7 @@ export default function ProviderModelsSection({
           togglingModelId={togglingModelId}
           onTestModel={onTestModel}
           modelTestStatus={modelTestStatus}
+          modelAvailabilityLoading={modelAvailabilityLoading}
           testingModelId={testingModelId}
           onTestAll={handleTestAll}
           testingAll={testingAll}
@@ -372,6 +380,7 @@ export default function ProviderModelsSection({
           togglingModelId={togglingModelId}
           onTestModel={onTestModel}
           modelTestStatus={modelTestStatus}
+          modelAvailabilityLoading={modelAvailabilityLoading}
           onModelTestStatusChange={onModelTestStatusChange}
           testingModelId={testingModelId}
           providerId={providerId}
@@ -526,7 +535,10 @@ export default function ProviderModelsSection({
               }
               togglingHidden={togglingModelId === model.id}
               onTestModel={onTestModel}
-              testStatus={modelTestStatus[model.id] || null}
+              testStatus={resolveRowAvailabilityStatus(
+                modelTestStatus[model.id],
+                modelAvailabilityLoading
+              )}
               testingModel={testingModelId === model.id}
             />
           );

@@ -37,6 +37,11 @@ function baseRuntime(): ProviderRuntimeState {
   };
 }
 
+test("model availability: missing evidence is visibly untested", () => {
+  assert.equal(modelAvailabilityUiStatus(null), "unknown");
+  assert.equal(modelAvailabilityUiStatus(undefined), "unknown");
+});
+
 test("model availability: successful probe is routable and resets failures", () => {
   const record = classifyModelAvailability({
     providerId: "gemini",

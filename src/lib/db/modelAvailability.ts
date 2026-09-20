@@ -120,6 +120,32 @@ export function getModelAvailabilitySummaryByProvider(): Record<
   return summary;
 }
 
+/**
+ * Distinct model ids that carry persisted evidence, per provider.
+ *
+ * The summary above counts states; this returns the KEYSPACE those counts were
+ * computed over, so a caller holding a second keyspace (the synced catalog)
+ * can subtract the two as sets instead of subtracting their sizes. The sizes
+ * are not comparable: evidence survives a model leaving the catalog, so
+ * `catalogSize - checkedSize` silently under-reports how many catalog models
+ * nobody has ever probed. Model ids are already provider-stripped
+ * (`normalizeAvailabilityModelId`) at write time.
+ */
+export function getCheckedModelIdsByProvider(): Map<string, Set<string>> {
+  const byProvider = new Map<string, Set<string>>();
+  for (const inventory of getAllModelAvailabilityInventories()) {
+    let ids = byProvider.get(inventory.providerId);
+    if (!ids) {
+      ids = new Set<string>();
+      byProvider.set(inventory.providerId, ids);
+    }
+    for (const record of Object.values(inventory.models)) {
+      ids.add(record.modelId);
+    }
+  }
+  return byProvider;
+}
+
 export function getModelAvailabilityInventoriesForProvider(
   providerId: string
 ): ModelAvailabilityInventory[] {

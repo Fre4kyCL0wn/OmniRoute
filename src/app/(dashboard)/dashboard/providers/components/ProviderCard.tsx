@@ -38,6 +38,13 @@ interface ProviderStats {
   codexServiceTier?: "default" | "priority" | "flex" | null;
   modelAvailability?: {
     totalChecked: number;
+    /**
+     * Catalog-relative counters. Optional because a legacy `/api/models/availability`
+     * payload has only the state counters — the quota/blocked/degraded badges below
+     * must keep rendering from such a payload, so nothing here may be gated on them.
+     */
+    discovered?: number;
+    untested?: number;
     available: number;
     rateLimited: number;
     quotaExhausted: number;
@@ -628,8 +635,15 @@ const ProviderCard = forwardRef<ProviderCardHandle, ProviderCardProps>(function 
                           }
                         : undefined
                     )}
-                    {stats.modelAvailability && stats.modelAvailability.totalChecked > 0 && (
+                    {stats.modelAvailability && (
                       <>
+                        {(stats.modelAvailability.untested ?? 0) > 0 && (
+                          <Badge variant="default" size="sm" icon="help">
+                            {providerText(t, "modelUntestedFlag", "{count} models untested", {
+                              count: stats.modelAvailability.untested,
+                            })}
+                          </Badge>
+                        )}
                         {stats.modelAvailability.quotaExhausted +
                           stats.modelAvailability.rateLimited >
                           0 && (
@@ -659,14 +673,13 @@ const ProviderCard = forwardRef<ProviderCardHandle, ProviderCardProps>(function 
                             })}
                           </Badge>
                         )}
-                        {stats.modelAvailability.blocked === 0 &&
-                          stats.modelAvailability.available > 0 && (
-                            <Badge variant="success" size="sm" icon="check_circle">
-                              {providerText(t, "modelsAvailableFlag", "{count} models OK", {
-                                count: stats.modelAvailability.available,
-                              })}
-                            </Badge>
-                          )}
+                        {stats.modelAvailability.available > 0 && (
+                          <Badge variant="success" size="sm" icon="check_circle">
+                            {providerText(t, "modelsAvailableFlag", "{count} models OK", {
+                              count: stats.modelAvailability.available,
+                            })}
+                          </Badge>
+                        )}
                       </>
                     )}
                     {stats.expiryStatus === "expired" && (

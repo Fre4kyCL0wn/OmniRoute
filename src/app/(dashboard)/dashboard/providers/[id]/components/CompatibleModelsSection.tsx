@@ -20,6 +20,7 @@ import {
   getDisplayModelAlias,
   providerText,
   type CompatModelRow,
+  resolveRowAvailabilityStatus,
 } from "../providerPageHelpers";
 import { ModelVisibilityToolbar } from "./ModelRow";
 import { sortModelsFreeFirst, isFreeModel } from "@/shared/utils/freeModels";
@@ -68,6 +69,11 @@ export interface CompatibleModelsSectionProps {
   togglingModelId?: string | null;
   onTestModel?: (modelId: string, fullModel: string) => Promise<void>;
   modelTestStatus?: Record<string, "ok" | "error" | "quota" | null>;
+  /**
+   * True while the persisted availability inventory is still being fetched.
+   * Rows must render "checking" rather than UNTESTED until it flips to false.
+   */
+  modelAvailabilityLoading?: boolean;
   testingModelId?: string | null;
   onTestAll?: (targets: Array<{ modelId: string; fullModel: string }>) => Promise<void>;
   testingAll?: boolean;
@@ -112,6 +118,7 @@ export default function CompatibleModelsSection({
   togglingModelId,
   onTestModel,
   modelTestStatus,
+  modelAvailabilityLoading,
   testingModelId,
   onTestAll,
   testingAll,
@@ -473,7 +480,10 @@ export default function CompatibleModelsSection({
                   onToggleHidden={onToggleHidden}
                   togglingHidden={togglingModelId === modelId}
                   onTestModel={onTestModel}
-                  testStatus={modelTestStatus?.[modelId] || null}
+                  testStatus={resolveRowAvailabilityStatus(
+                    modelTestStatus?.[modelId],
+                    modelAvailabilityLoading
+                  )}
                   testingModel={testingModelId === modelId}
                 />
               );

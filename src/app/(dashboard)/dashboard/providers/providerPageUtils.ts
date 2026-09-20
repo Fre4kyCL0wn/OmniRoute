@@ -638,6 +638,15 @@ export interface ProviderPageData {
 export interface ModelAvailabilityProviderSummarySnapshot {
   providerId: string;
   totalChecked: number;
+  /**
+   * Catalog-relative counters, added after the state counters shipped. They are
+   * optional on purpose: a response produced by an older server (or replayed
+   * from a cache) carries the state counters WITHOUT these two, and the card
+   * must keep rendering its quota/blocked/degraded badges from that payload
+   * instead of hiding the provider's health behind a missing field.
+   */
+  discovered?: number;
+  untested?: number;
   available: number;
   rateLimited: number;
   quotaExhausted: number;
@@ -645,6 +654,60 @@ export interface ModelAvailabilityProviderSummarySnapshot {
   degraded: number;
   incompatible: number;
   blocked: number;
+}
+
+const MODEL_AVAILABILITY_COUNTER_FIELDS = [
+  "totalChecked",
+  "discovered",
+  "untested",
+  "available",
+  "rateLimited",
+  "quotaExhausted",
+  "unavailable",
+  "degraded",
+  "incompatible",
+  "blocked",
+] as const;
+
+/**
+ * Coerce `/api/models/availability`'s `summary` into per-provider counters.
+ *
+ * Every counter is normalized to a non-negative integer so the card can do
+ * arithmetic on it (`quotaExhausted + rateLimited`) without `NaN` leaking into
+ * a badge. `discovered`/`untested` are preserved as ABSENT when the payload
+ * omits them — that is the signal "this response predates the catalog join",
+ * which is different from "the catalog is empty" (0) and must not be faked.
+ */
+export function normalizeModelAvailabilitySummary(
+  raw: unknown
+): Record<string, ModelAvailabilityProviderSummarySnapshot> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const summary: Record<string, ModelAvailabilityProviderSummarySnapshot> = {};
+  for (const [providerId, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const source = value as Record<string, unknown>;
+    const entry: Record<string, unknown> = { providerId };
+    for (const field of MODEL_AVAILABILITY_COUNTER_FIELDS) {
+      const count = toCounter(source[field]);
+      if (count === null) {
+        // Optional fields stay absent; required ones fall back to 0 so the
+        // card never renders "NaN models blocked".
+        if (field === "discovered" || field === "untested") continue;
+        entry[field] = 0;
+        continue;
+      }
+      entry[field] = count;
+    }
+    summary[providerId] = entry as unknown as ModelAvailabilityProviderSummarySnapshot;
+  }
+  return summary;
+}
+
+function toCounter(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.floor(parsed));
 }
 
 /** Mirrors ProviderPopularityEntry from src/lib/catalog/openrouterProviderStats.ts (kept local to avoid a server-only import from a client component). */
@@ -730,9 +793,6 @@ export async function loadProviderPageData(
     openRouterProviderStats: Array.isArray(openRouterStatsData?.data)
       ? openRouterStatsData.data
       : [],
-    modelAvailabilitySummary:
-      modelAvailabilityData?.summary && typeof modelAvailabilityData.summary === "object"
-        ? modelAvailabilityData.summary
-        : {},
+    modelAvailabilitySummary: normalizeModelAvailabilitySummary(modelAvailabilityData?.summary),
   };
 }

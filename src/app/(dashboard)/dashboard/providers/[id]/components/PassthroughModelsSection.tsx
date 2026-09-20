@@ -30,6 +30,7 @@ import {
   shouldSwitchToVisibleFilter,
   type CompatModelRow,
   type CompatByProtocolMap,
+  resolveRowAvailabilityStatus,
 } from "../providerPageHelpers";
 import { ModelVisibilityToolbar } from "./ModelRow";
 import { sortModelsFreeFirst, isFreeModel } from "@/shared/utils/freeModels";
@@ -71,6 +72,11 @@ export interface PassthroughModelsSectionProps {
   togglingModelId?: string | null;
   onTestModel?: (modelId: string, fullModel: string) => Promise<void>;
   modelTestStatus?: Record<string, "ok" | "error" | "quota" | null>;
+  /**
+   * True while the persisted availability inventory is still being fetched.
+   * Rows must render "checking" rather than UNTESTED until it flips to false.
+   */
+  modelAvailabilityLoading?: boolean;
   /** Report a model's test-all result so the parent updates the green/red icon. */
   onModelTestStatusChange?: (modelId: string, status: "ok" | "error" | "quota") => void;
   testingModelId?: string | null;
@@ -116,6 +122,7 @@ export default function PassthroughModelsSection({
   togglingModelId,
   onTestModel,
   modelTestStatus,
+  modelAvailabilityLoading,
   onModelTestStatusChange,
   testingModelId,
   providerId,
@@ -454,7 +461,10 @@ export default function PassthroughModelsSection({
                 onToggleHidden={onToggleHidden}
                 togglingHidden={togglingModelId === modelId}
                 onTestModel={onTestModel}
-                testStatus={modelTestStatus?.[modelId] || null}
+                testStatus={resolveRowAvailabilityStatus(
+                  modelTestStatus?.[modelId],
+                  modelAvailabilityLoading
+                )}
                 testingModel={testingModelId === modelId}
               />
             ))}

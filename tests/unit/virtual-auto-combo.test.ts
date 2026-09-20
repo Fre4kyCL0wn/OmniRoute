@@ -388,3 +388,54 @@ test("createVirtualAutoCombo excludes trigger-bypassed Microsoft Designer connec
     "a merely similar provider ID must remain eligible"
   );
 });
+
+test("verified free availability filter fails closed for untested connections", () => {
+  const candidates = [
+    {
+      provider: "openrouter",
+      connectionId: null,
+      allowedConnectionIds: ["conn-ok", "conn-unknown"],
+      model: "alpha:free",
+      modelStr: "openrouter/alpha:free",
+      costPer1MTokens: 0,
+    },
+    {
+      provider: "openrouter",
+      connectionId: null,
+      allowedConnectionIds: ["conn-unknown"],
+      model: "beta:free",
+      modelStr: "openrouter/beta:free",
+      costPer1MTokens: 0,
+    },
+  ];
+  const filtered = virtualFactory.filterVerifiedFreeAvailabilityCandidates(
+    candidates,
+    (connectionId) =>
+      connectionId === "conn-ok"
+        ? {
+            schemaVersion: 1,
+            providerId: "openrouter",
+            connectionId,
+            updatedAt: "2026-09-19T20:00:00.000Z",
+            models: {
+              "alpha:free": {
+                providerId: "openrouter",
+                connectionId,
+                modelId: "alpha:free",
+                state: "available",
+                checkedAt: "2026-09-19T20:00:00.000Z",
+                retryAfterAt: null,
+                statusCode: 200,
+                reason: "probe_ok",
+                consecutiveFailures: 0,
+                source: "batch_test",
+              },
+            },
+          }
+        : null
+  );
+
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0]?.model, "alpha:free");
+  assert.deepEqual(filtered[0]?.allowedConnectionIds, ["conn-ok"]);
+});

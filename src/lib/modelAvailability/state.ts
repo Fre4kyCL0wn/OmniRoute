@@ -164,10 +164,12 @@ export function isPersistedModelAvailabilityRoutable(
   return record == null || record.state === "available";
 }
 
+export type ModelAvailabilityUiStatus = "ok" | "error" | "quota" | "unknown";
+
 export function modelAvailabilityUiStatus(
   record: ModelAvailabilityRecord | null | undefined
-): "ok" | "error" | "quota" | null {
-  if (!record) return null;
+): ModelAvailabilityUiStatus {
+  if (!record) return "unknown";
   if (record.state === "available") return "ok";
   if (record.state === "rate_limited" || record.state === "quota_exhausted") return "quota";
   return "error";

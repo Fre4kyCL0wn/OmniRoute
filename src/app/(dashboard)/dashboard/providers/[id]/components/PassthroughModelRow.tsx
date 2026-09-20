@@ -10,7 +10,7 @@
  */
 import React, { useState, useRef, useEffect } from "react";
 import { Badge } from "@/shared/components";
-import { providerText } from "../providerPageHelpers";
+import { providerText, type ModelRowAvailabilityStatus } from "../providerPageHelpers";
 import ModelCompatPopover from "./ModelCompatPopover";
 import { ModelSourceBadge, type ModelCompatSavePatch } from "./ModelRow";
 
@@ -44,7 +44,8 @@ export interface PassthroughModelRowProps {
   onToggleHidden?: (modelId: string, hidden: boolean) => Promise<void>;
   togglingHidden?: boolean;
   onTestModel?: (modelId: string, fullModel: string) => Promise<void>;
-  testStatus?: "ok" | "error" | "quota" | null;
+  /** `loading` = the inventory fetch has not settled yet; never label that UNTESTED. */
+  testStatus?: ModelRowAvailabilityStatus | null;
   testingModel?: boolean;
 }
 
@@ -180,6 +181,28 @@ export default function PassthroughModelRow({
               {providerText(t, "freeBadge", "Free")}
             </Badge>
           )}
+          <Badge
+            variant={
+              testStatus === "ok"
+                ? "success"
+                : testStatus === "quota"
+                  ? "warning"
+                  : testStatus === "error"
+                    ? "error"
+                    : "default"
+            }
+            className="shrink-0 px-1.5 py-0 text-[10px] uppercase"
+          >
+            {testStatus === "ok"
+              ? providerText(t, "modelAvailabilityAvailable", "available")
+              : testStatus === "quota"
+                ? providerText(t, "modelAvailabilityQuota", "quota")
+                : testStatus === "error"
+                  ? providerText(t, "modelAvailabilityBlocked", "blocked")
+                  : testStatus === "loading"
+                    ? providerText(t, "modelAvailabilityChecking", "checking…")
+                    : providerText(t, "modelAvailabilityUntested", "untested")}
+          </Badge>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <button

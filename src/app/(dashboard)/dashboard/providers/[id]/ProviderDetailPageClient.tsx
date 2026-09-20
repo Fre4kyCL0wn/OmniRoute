@@ -498,6 +498,7 @@ export default function ProviderDetailPageClient() {
     modelFilter,
     testingModelId,
     modelTestStatus,
+    modelAvailabilityLoading,
     testingAll,
     testProgress,
     autoHideFailed,
@@ -795,6 +796,7 @@ export default function ProviderDetailPageClient() {
             modelFilter={modelFilter}
             testingModelId={testingModelId}
             modelTestStatus={modelTestStatus}
+            modelAvailabilityLoading={modelAvailabilityLoading}
             onModelTestStatusChange={onModelTestStatusChange}
             testingAll={testingAll}
             testProgress={testProgress}

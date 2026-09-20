@@ -1,13 +1,29 @@
 import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import {
+  getCheckedModelIdsByProvider,
   getModelAvailabilityInventoriesForProvider,
   getModelAvailabilityInventory,
   getModelAvailabilitySummaryByProvider,
 } from "@/lib/db/modelAvailability";
+import { getHiddenModelsByProvider } from "@/lib/db/models";
+import { getAllActiveSyncedModels } from "@/lib/db/models/activeSyncedCatalog";
+import {
+  buildProviderAvailabilitySummary,
+  type ProviderAvailabilitySummary,
+} from "@/lib/modelAvailability/summary";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+
+async function buildAvailabilitySummary(): Promise<Record<string, ProviderAvailabilitySummary>> {
+  return buildProviderAvailabilitySummary({
+    counters: getModelAvailabilitySummaryByProvider(),
+    syncedModels: await getAllActiveSyncedModels(),
+    checkedModelIds: getCheckedModelIdsByProvider(),
+    hiddenModelIds: getHiddenModelsByProvider(),
+  });
+}
 
 export async function GET(request: Request) {
   const authError = await requireManagementAuth(request);
@@ -18,7 +34,7 @@ export async function GET(request: Request) {
   const connectionId = url.searchParams.get("connectionId")?.trim() ?? "";
   if (!providerId) {
     return NextResponse.json(
-      { summary: getModelAvailabilitySummaryByProvider() },
+      { summary: await buildAvailabilitySummary() },
       { headers: { "Cache-Control": "no-store" } }
     );
   }

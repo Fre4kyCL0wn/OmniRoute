@@ -71,6 +71,14 @@ export interface UseModelVisibilityHandlersReturn {
   modelFilter: string;
   testingModelId: string | null;
   modelTestStatus: Record<string, "ok" | "error" | "quota">;
+  /**
+   * True while the persisted availability inventory for the selected connection
+   * is still being fetched. A model missing from `modelTestStatus` means
+   * "nobody has probed it" only once this is false — before that it merely
+   * means "we have not read the evidence yet", and the rows must not label it
+   * UNTESTED.
+   */
+  modelAvailabilityLoading: boolean;
   testingAll: boolean;
   testProgress: { done: number; total: number } | null;
   autoHideFailed: boolean;
@@ -119,6 +127,7 @@ export function useModelVisibilityHandlers({
   const [modelTestStatus, setModelTestStatus] = useState<Record<string, "ok" | "error" | "quota">>(
     {}
   );
+  const [modelAvailabilityLoading, setModelAvailabilityLoading] = useState(true);
   const [testingAll, setTestingAll] = useState(false);
   const [testProgress, setTestProgress] = useState<{ done: number; total: number } | null>(null);
   const [autoHideFailed, setAutoHideFailed] = useState(false);
@@ -146,12 +155,24 @@ export function useModelVisibilityHandlers({
     let cancelled = false;
     if (!connectionId) {
       queueMicrotask(() => {
-        if (!cancelled) setModelTestStatus({});
+        if (cancelled) return;
+        setModelTestStatus({});
+        // Nothing to load: without a connection there is no inventory to read,
+        // so every model is genuinely untested rather than pending.
+        setModelAvailabilityLoading(false);
       });
       return () => {
         cancelled = true;
       };
     }
+    // Same deferral as the no-connection branch above: the effect body must not
+    // call setState synchronously (react-hooks/set-state-in-effect). A network
+    // round-trip cannot beat a microtask, so the rows still see `loading` for
+    // the whole fetch.
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setModelAvailabilityLoading(true);
+    });
     void (async () => {
       try {
         const response = await fetch(
@@ -176,6 +197,10 @@ export function useModelVisibilityHandlers({
         setModelTestStatus(next);
       } catch {
         if (!cancelled) setModelTestStatus({});
+      } finally {
+        // The fetch settled either way; the rows may now distinguish
+        // "no evidence" from "evidence not read yet".
+        if (!cancelled) setModelAvailabilityLoading(false);
       }
     })();
     return () => {
@@ -485,6 +510,7 @@ export function useModelVisibilityHandlers({
     modelFilter,
     testingModelId,
     modelTestStatus,
+    modelAvailabilityLoading,
     testingAll,
     testProgress,
     autoHideFailed,

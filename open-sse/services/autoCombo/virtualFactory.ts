@@ -31,7 +31,10 @@ import { buildFamilyCandidateFilter, type ModelFamily } from "./modelFamily";
 import { getHiddenModelsByProvider } from "@/models";
 import { getSyncedAvailableModelsByConnection, getCustomModels } from "@/lib/db/models";
 import { getModelAvailabilityInventory } from "@/lib/db/modelAvailability";
-import { isPersistedModelAvailabilityRoutable } from "@/lib/modelAvailability/state";
+import {
+  isPersistedModelAvailabilityRoutable,
+  normalizeAvailabilityModelId,
+} from "@/lib/modelAvailability/state";
 import { filterPaidOnlyCandidates } from "./paidModelFilter";
 import { filterModelExposureCandidates } from "./modelExposureFilter";
 import {
@@ -74,19 +77,55 @@ export interface AutoComboSpec {
   family?: ModelFamily;
 }
 
-/** Once-per-process empty-pool AUTO warns (steady empty is not a metronome). */
-const emptyPoolWarned = new Set<string>();
+/**
+ * An auto route that resolves to zero candidates, as an observable fact.
+ *
+ * The log line is emitted once per label on purpose (a steady empty pool is
+ * not a metronome), but "we already warned about this" must not mean "nobody
+ * can tell it is still happening". Every occurrence updates this record, so
+ * `getEmptyAutoPoolSignals()` can tell an operator surface the difference
+ * between a one-off at boot and a route that has been dark for an hour.
+ */
+export interface EmptyAutoPoolSignal {
+  label: string;
+  message: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  occurrences: number;
+}
 
-export function warnEmptyAutoPoolOnce(label: string, message: string, _now = Date.now()): boolean {
-  if (emptyPoolWarned.has(label)) return false;
-  emptyPoolWarned.add(label);
+const emptyPoolSignals = new Map<string, EmptyAutoPoolSignal>();
+
+export function warnEmptyAutoPoolOnce(label: string, message: string, now = Date.now()): boolean {
+  const at = new Date(now).toISOString();
+  const existing = emptyPoolSignals.get(label);
+  if (existing) {
+    existing.message = message;
+    existing.lastSeenAt = at;
+    existing.occurrences += 1;
+    return false;
+  }
+  emptyPoolSignals.set(label, {
+    label,
+    message,
+    firstSeenAt: at,
+    lastSeenAt: at,
+    occurrences: 1,
+  });
   log.warn("AUTO", message);
   return true;
 }
 
+/** Snapshot of every auto route that has resolved to an empty pool this process. */
+export function getEmptyAutoPoolSignals(): EmptyAutoPoolSignal[] {
+  return [...emptyPoolSignals.values()]
+    .map((signal) => ({ ...signal }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
+
 /** Test-only: reset the once-per-label set (also models emptiness reappearing). */
 export function resetEmptyAutoPoolWarnStateForTests(): void {
-  emptyPoolWarned.clear();
+  emptyPoolSignals.clear();
 }
 
 /** Minimal connection shape needed for virtual auto-combo factory */
@@ -128,6 +167,109 @@ export interface VirtualAutoComboCandidate {
    * do no extra work.
    */
   freeAccessExclusion?: import("./strictZeroCostFilter").StrictZeroCostExclusionReason | null;
+}
+
+const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
+
+/**
+ * Every id that promises free-only routing resolves to `tier: "free"` on the
+ * spec before the pool is built — `auto/<category>:free`, the flat
+ * `auto/best-free` overlay (`FLAT_TIER_OVERLAY_IDS` in `builtinCatalog.ts`),
+ * and any caller-supplied spec. Asking the spec instead of matching combo ids
+ * is what keeps the guard below tied to the INTENT rather than to a list of
+ * names a future id could forget to join.
+ */
+export function isFreeTierIntent(spec: AutoComboSpec | undefined): boolean {
+  return spec?.tier === "free";
+}
+
+/**
+ * `OMNIROUTE_AUTO_FREE_REQUIRE_VERIFIED_AVAILABILITY` — when on, a free auto
+ * route admits ONLY models with persisted `available` evidence, and returns an
+ * empty pool rather than guessing. Off by default: on a fresh instance nothing
+ * has been probed yet, so defaulting it on would make every free route dark
+ * until the first sweep completes.
+ */
+export function isVerifiedFreeAvailabilityRequired(env: NodeJS.ProcessEnv = process.env): boolean {
+  return TRUTHY_ENV_VALUES.has(
+    (env.OMNIROUTE_AUTO_FREE_REQUIRE_VERIFIED_AVAILABILITY ?? "").trim().toLowerCase()
+  );
+}
+
+/**
+ * Fail-closed free-tier admission: keep only candidates that some connection
+ * has actually been observed serving (`state === "available"` in the persisted
+ * availability inventory).
+ *
+ * Connection identity is preserved exactly, because it is part of the routing
+ * contract and not a detail this filter may rewrite:
+ *
+ *   - a no-auth candidate keeps `connectionId === SYNTHETIC_NOAUTH_CONNECTION_ID`.
+ *     The sentinel is a real evidence key (probes of a keyless provider persist
+ *     under it), so it is looked up like any other id — never skipped, and
+ *     never rewritten to `null`, which would send the executor down the
+ *     credentialed auth path for a provider that has no credential;
+ *   - a candidate already pinned to one connection is verified against exactly
+ *     that connection and kept as-is, or dropped. It is never re-pointed at a
+ *     different account;
+ *   - a logical multi-account candidate (`connectionId: null`) keeps
+ *     `connectionId: null` and has `allowedConnectionIds` narrowed to exactly
+ *     the verified subset — the same narrowing contract
+ *     `filterStrictZeroCostCandidates` uses, which `autoStrategy.ts` already
+ *     enforces as a hard allowlist at dispatch.
+ *
+ * Returns the input array unchanged when nothing was filtered or narrowed, so
+ * callers can cheaply detect "the gate changed nothing".
+ */
+export function filterVerifiedFreeAvailabilityCandidates(
+  pool: VirtualAutoComboCandidate[],
+  getInventory: typeof getModelAvailabilityInventory = getModelAvailabilityInventory
+): VirtualAutoComboCandidate[] {
+  const inventoryCache = new Map<string, ReturnType<typeof getModelAvailabilityInventory>>();
+  const inventoryFor = (connectionId: string) => {
+    if (!inventoryCache.has(connectionId)) {
+      inventoryCache.set(connectionId, getInventory(connectionId));
+    }
+    return inventoryCache.get(connectionId) ?? null;
+  };
+
+  const isVerified = (candidate: VirtualAutoComboCandidate, connectionId: string): boolean => {
+    const inventory = inventoryFor(connectionId);
+    if (!inventory || inventory.providerId !== candidate.provider) return false;
+    // Inventories are keyed by the provider-stripped model id
+    // (`normalizeAvailabilityModelId`), which is what `recordModelTestAvailability`
+    // persists. Normalizing here keeps lookups correct for candidates whose
+    // `model` still carries the `provider/` prefix.
+    const modelKey = normalizeAvailabilityModelId(candidate.provider, candidate.model);
+    if (!Object.hasOwn(inventory.models, modelKey)) return false;
+    return inventory.models[modelKey]?.state === "available";
+  };
+
+  const kept: VirtualAutoComboCandidate[] = [];
+  let changed = false;
+  for (const candidate of pool) {
+    if (candidate.connectionId !== null && candidate.connectionId !== undefined) {
+      // Pinned to one account (including the no-auth sentinel): that exact
+      // account must carry the evidence.
+      if (isVerified(candidate, candidate.connectionId)) kept.push(candidate);
+      else changed = true;
+      continue;
+    }
+
+    const allowed = candidate.allowedConnectionIds ?? [];
+    const verified = allowed.filter((connectionId) => isVerified(candidate, connectionId));
+    if (verified.length === 0) {
+      changed = true;
+      continue;
+    }
+    if (verified.length === allowed.length) {
+      kept.push(candidate);
+      continue;
+    }
+    changed = true;
+    kept.push({ ...candidate, allowedConnectionIds: verified });
+  }
+  return changed ? kept : pool;
 }
 
 type VirtualAutoCombo = AutoComboConfig & {
@@ -1053,7 +1195,18 @@ export async function createVirtualAutoComboFromPrepared(
     }
   }
 
-  if (spec?.tier === "free" && effectivePool.length > 0) {
+  if (isFreeTierIntent(spec) && effectivePool.length > 0) {
+    if (isVerifiedFreeAvailabilityRequired()) {
+      const beforeVerified = effectivePool.length;
+      effectivePool = filterVerifiedFreeAvailabilityCandidates(effectivePool);
+      if (beforeVerified > 0 && effectivePool.length === 0) {
+        warnEmptyAutoPoolOnce(
+          "auto/free-verified",
+          "free auto-route has no models with persisted AVAILABLE evidence; returning an empty pool until the availability sweep verifies a candidate."
+        );
+      }
+    }
+
     const stateRequests = new Map<string, Promise<ProviderRuntimeState>>();
     // Keyed by provider:connection only — model is deliberately omitted from the
     // key. filterFreeCandidatesByRuntimeState reads exclusively the
