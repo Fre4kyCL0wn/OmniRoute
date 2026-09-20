@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   useModelVisibilityHandlers,
+  type UseModelVisibilityHandlersParams,
   type UseModelVisibilityHandlersReturn,
 } from "../hooks/useModelVisibilityHandlers";
 
@@ -35,11 +36,14 @@ const baseProps = {
   providerNode: { id: "anthropic-compatible-cc-test" },
 };
 
-function renderHook(): { get: () => HookResult } {
+function renderHook(overrides: Partial<UseModelVisibilityHandlersParams> = {}): {
+  get: () => HookResult;
+} {
   let latestResult: HookResult | null = null;
+  const props: UseModelVisibilityHandlersParams = { ...baseProps, ...overrides };
 
   function Wrapper() {
-    const result = useModelVisibilityHandlers(baseProps);
+    const result = useModelVisibilityHandlers(props);
     React.useEffect(() => {
       latestResult = result;
     });
@@ -94,6 +98,56 @@ describe("useModelVisibilityHandlers", () => {
 
     expect(hook.get().autoHideFailed).toBe(false);
     expect(hook.get().visibilityFilter).toBe("visible");
+  });
+
+  it("aggregates persisted provider availability when no connection is selected", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/api/models/availability")) {
+        expect(url).toBe("/api/models/availability?providerId=codex");
+        return {
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              providerId: "codex",
+              inventories: [
+                {
+                  models: {
+                    "gpt-5.6-sol": { state: "degraded" },
+                    "gpt-5.6-terra": { state: "quota_exhausted" },
+                    "gpt-5.6-luna": { state: "unavailable" },
+                  },
+                },
+                {
+                  models: {
+                    "gpt-5.6-sol": { state: "available" },
+                  },
+                },
+              ],
+            }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const hook = renderHook({
+      providerId: "codex",
+      providerStorageAlias: "cx",
+      selectedConnection: null,
+      providerNode: { id: "codex" },
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(hook.get().modelAvailabilityLoading).toBe(false);
+    expect(hook.get().modelTestStatus["gpt-5.6-sol"]).toBe("ok");
+    expect(hook.get().modelTestStatus["gpt-5.6-terra"]).toBe("quota");
+    expect(hook.get().modelTestStatus["gpt-5.6-luna"]).toBe("error");
   });
 
   it("does not hide a model when a single-model test fails", async () => {

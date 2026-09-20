@@ -153,46 +153,53 @@ export function useModelVisibilityHandlers({
     const connectionId = selectedConnectionId;
     const availabilityProviderId = selectedConnectionProvider || providerNodeId || providerId;
     let cancelled = false;
-    if (!connectionId) {
-      queueMicrotask(() => {
-        if (cancelled) return;
-        setModelTestStatus({});
-        // Nothing to load: without a connection there is no inventory to read,
-        // so every model is genuinely untested rather than pending.
-        setModelAvailabilityLoading(false);
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
-    // Same deferral as the no-connection branch above: the effect body must not
-    // call setState synchronously (react-hooks/set-state-in-effect). A network
-    // round-trip cannot beat a microtask, so the rows still see `loading` for
-    // the whole fetch.
+
+    // A provider page normally has no `selectedConnection`: that state is only
+    // populated while editing an account. In that normal view we still need to
+    // show persisted availability, so ask the API for all provider inventories
+    // and aggregate them. An explicitly selected account remains connection-specific.
     queueMicrotask(() => {
       if (cancelled) return;
       setModelAvailabilityLoading(true);
     });
     void (async () => {
       try {
-        const response = await fetch(
-          `/api/models/availability?providerId=${encodeURIComponent(availabilityProviderId)}&connectionId=${encodeURIComponent(connectionId)}`,
-          { cache: "no-store" }
-        );
+        const params = new URLSearchParams({ providerId: availabilityProviderId });
+        if (connectionId) params.set("connectionId", connectionId);
+        const response = await fetch(`/api/models/availability?${params.toString()}`, {
+          cache: "no-store",
+        });
         const payload = response?.ok ? await response.json() : null;
         if (cancelled) return;
-        const models = payload?.inventory?.models;
-        if (!models || typeof models !== "object") {
-          setModelTestStatus({});
-          return;
-        }
+
+        const inventories = connectionId
+          ? payload?.inventory
+            ? [payload.inventory]
+            : []
+          : Array.isArray(payload?.inventories)
+            ? payload.inventories
+            : [];
         const next: Record<string, "ok" | "error" | "quota"> = {};
-        for (const [modelId, raw] of Object.entries(models as Record<string, unknown>)) {
-          if (!raw || typeof raw !== "object") continue;
-          const state = (raw as Record<string, unknown>).state;
-          if (state === "available") next[modelId] = "ok";
-          else if (state === "rate_limited" || state === "quota_exhausted") next[modelId] = "quota";
-          else if (typeof state === "string") next[modelId] = "error";
+        const priority = { error: 1, quota: 2, ok: 3 } as const;
+
+        for (const inventory of inventories) {
+          const models = inventory?.models;
+          if (!models || typeof models !== "object") continue;
+          for (const [modelId, raw] of Object.entries(models as Record<string, unknown>)) {
+            if (!raw || typeof raw !== "object") continue;
+            const state = (raw as Record<string, unknown>).state;
+            const candidate =
+              state === "available"
+                ? "ok"
+                : state === "rate_limited" || state === "quota_exhausted"
+                  ? "quota"
+                  : typeof state === "string"
+                    ? "error"
+                    : null;
+            if (!candidate) continue;
+            const current = next[modelId];
+            if (!current || priority[candidate] > priority[current]) next[modelId] = candidate;
+          }
         }
         setModelTestStatus(next);
       } catch {
