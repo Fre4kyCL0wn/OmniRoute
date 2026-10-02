@@ -1,7 +1,7 @@
 ---
 title: "OmniRoute Documentation"
-version: 3.8.40
-lastUpdated: 2026-06-28
+version: 3.8.51
+lastUpdated: 2026-10-02
 ---
 
 # OmniRoute Documentation
@@ -9,6 +9,10 @@ lastUpdated: 2026-06-28
 Navigable index of the OmniRoute documentation set. Topics are grouped by intent so you can find what you need quickly.
 
 > Looking for the project overview, install steps, or release notes? See the root [README.md](../README.md), [ROADMAP.md](../ROADMAP.md), [CHANGELOG.md](../CHANGELOG.md), and [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+## Jarvis fork operators
+
+If you are working on the Jarvis deployment of this fork, start with [JARVIS-INTEGRATION.md](JARVIS-INTEGRATION.md). It records the current production pin, authority boundary and safe extension workflow. The default GitHub branch is a development/release base, not deployment evidence.
 
 ---
 

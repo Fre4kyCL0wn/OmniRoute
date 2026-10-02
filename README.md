@@ -11,6 +11,12 @@
 
 </div>
 
+## Jarvis fork integration
+
+This fork is also the routing layer used by the private Jarvis system. Jarvis treats OmniRoute as an **inference/routing plane, never an authority plane**: provider/model selection, fallback, quota and cooldown logic live here; project permissions, memory authority and privileged actions remain in Jarvis Brain Core.
+
+Current Jarvis production identity and extension rules are documented in [`docs/JARVIS-INTEGRATION.md`](docs/JARVIS-INTEGRATION.md). The GitHub default branch is not itself proof of what Jarvis currently runs in production.
+
 <div align="center">
 
 ## 💰 ~1.47B Free Tokens / Month
